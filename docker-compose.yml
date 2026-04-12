@@ -1,0 +1,65 @@
+services:
+  opentakserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: opentakserver
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      OTS_LISTENER_ADDRESS: "0.0.0.0"
+      OTS_RABBITMQ_SERVER_ADDRESS: "rabbitmq"
+      OTS_RABBITMQ_USERNAME: "guest"
+      OTS_RABBITMQ_PASSWORD: "guest"
+      OTS_MEDIAMTX_ENABLE: "False"
+      SQLALCHEMY_DATABASE_URI: "postgresql+psycopg://ots:ots@postgres/ots"
+      OTS_DATA_FOLDER: "/app/ots"
+    volumes:
+      - ots_data:/app/ots
+      - ./external_plugins/OTS-ai-plugin:/app/plugins/OTS-ai-plugin
+    command:
+      - "POETRY_DYNAMIC_VERSIONING_BYPASS=0.1.0 /app/venv/bin/pip install -q -e /app/plugins/OTS-ai-plugin && opentakserver"
+
+  postgres:
+    image: postgres:16
+    container_name: opentakserver-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ots
+      POSTGRES_USER: ots
+      POSTGRES_PASSWORD: ots
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ots -d ots"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: opentakserver-rabbitmq
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    ports:
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+volumes:
+  ots_data:
+  postgres_data:
+  rabbitmq_data:
+

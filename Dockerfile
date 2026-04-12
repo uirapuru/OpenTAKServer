@@ -1,8 +1,8 @@
-FROM python:3.13
+FROM python:3.12
 
 RUN addgroup --gid 1024 ots
 RUN adduser --home /app --disabled-password --gecos "" --force-badname --gid 1024 ots
-RUN apt update && apt install ffmpeg -y
+RUN apt update && apt install -y ffmpeg curl && rm -rf /var/lib/apt/lists/*
 
 USER ots
 
@@ -16,12 +16,13 @@ ENV PATH="/app/venv/bin:$PATH"
 # TODO: Install from PyPI
 RUN pip install git+https://github.com/brian7704/OpenTAKServer.git
 
-RUN /app/venv/bin/flask --app /app/venv/lib/python3.13/site-packages/opentakserver/app.py ots create-ca
-#RUN /app/venv/bin/flask --app /app/venv/lib/python3.13/site-packages/opentakserver/app.py db upgrade
+RUN /app/venv/bin/flask --app /app/venv/lib/python3.12/site-packages/opentakserver/app.py ots create-ca
+#RUN /app/venv/bin/flask --app /app/venv/lib/python3.12/site-packages/opentakserver/app.py db upgrade
 
 EXPOSE 8081
 
-ENTRYPOINT ["opentakserver"]
+ENTRYPOINT ["/bin/sh", "-c"]
+CMD ["opentakserver"]
 
 # Flask will stop gracefully on SIGINT (Ctrl-C).
 # Docker compose tries to stop processes using SIGTERM by default, then sends SIGKILL after a delay if the process doesn't stop.
