@@ -62,6 +62,43 @@ OTS can be installed on Windows using WSL and the Ubuntu installer script
 
 https://docs.opentakserver.io
 
+## Docker Compose Quick Start
+
+This repository includes a ready-to-run Compose stack for OpenTAKServer + PostgreSQL + RabbitMQ.
+
+1. Build and start services:
+
+  ```bash
+  docker compose up -d --build
+  ```
+
+2. Follow logs:
+
+  ```bash
+  docker compose logs -f opentakserver
+  ```
+
+3. Stop services:
+
+  ```bash
+  docker compose down
+  ```
+
+The stack exposes:
+- OpenTAKServer API/UI on port `8081`
+- RabbitMQ management UI on port `15672`
+
+To wipe all persisted data (database, RabbitMQ, and OTS files), run:
+
+```bash
+docker compose down -v
+```
+
+Additional notes:
+- Compose/deployment notes: [docs/docker-compose-notes.md](docs/docker-compose-notes.md)
+- Plugin development notes: [docs/plugins.md](docs/plugins.md)
+- AI agent context: [AGENTS.md](AGENTS.md)
+
 ## Supported Languages
 
 ![Supported Languages](https://weblate.opentakserver.io/widget/opentakserver/multi-auto.svg)
