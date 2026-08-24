@@ -40,6 +40,7 @@ from opentakserver.controllers.meshtastic_controller import MeshtasticController
 from opentakserver.defaultconfig import DefaultConfig
 from opentakserver.EmailValidator import EmailValidator
 from opentakserver.extensions import apscheduler, babel, db, ldap_manager, logger, mail, socketio
+from opentakserver.functions import rabbitmq_message_queue_url
 from opentakserver.models.Group import Group, GroupTypeEnum
 from opentakserver.models.Icon import Icon
 from opentakserver.models.role import Role
@@ -148,7 +149,7 @@ def init_extensions(app):
         app,
         logger=socketio_logger,
         ping_timeout=1,
-        message_queue="amqp://" + app.config.get("OTS_RABBITMQ_SERVER_ADDRESS"),
+        message_queue=rabbitmq_message_queue_url(app.config),
     )
 
     rabbit_credentials = pika.PlainCredentials(

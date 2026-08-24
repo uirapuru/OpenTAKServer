@@ -2,6 +2,7 @@ import json
 import math
 import re
 from datetime import datetime, timezone
+from urllib.parse import quote
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 import pika.channel
@@ -205,3 +206,32 @@ def bytes_to_gigabytes(size_bytes: int | None):
     if not size_bytes:
         return 0
     return round(size_bytes / 1024**3, 2)
+
+
+def rabbitmq_message_queue_url(config) -> str:
+    """Build the AMQP URL that Flask-SocketIO uses as its message queue.
+
+    OTS_RABBITMQ_SERVER_ADDRESS is also handed to pika as a bare host name
+    (pika.ConnectionParameters(host=...)), so credentials must never be
+    stored in it. Take them from OTS_RABBITMQ_USERNAME/OTS_RABBITMQ_PASSWORD,
+    the same values the pika connections already use.
+
+    Without credentials Flask-SocketIO falls back to the default guest user.
+    On any broker that disabled guest (or is not on localhost) RabbitMQ
+    answers (403) ACCESS_REFUSED, every socketio.emit() then raises, and the
+    web UI silently stops receiving live events.
+    """
+    host = config.get("OTS_RABBITMQ_SERVER_ADDRESS") or "127.0.0.1"
+
+    # Someone may already have put credentials into the address. Leave it be.
+    if "@" in host:
+        return "amqp://{}".format(host)
+
+    username = config.get("OTS_RABBITMQ_USERNAME")
+    if not username:
+        return "amqp://{}".format(host)
+
+    password = config.get("OTS_RABBITMQ_PASSWORD") or ""
+    return "amqp://{}:{}@{}".format(
+        quote(str(username), safe=""), quote(str(password), safe=""), host
+    )
