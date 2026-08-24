@@ -1369,7 +1369,7 @@ def status():
 
 
 def main():
-    sio = SocketIO(message_queue="amqp://" + app.config.get("OTS_RABBITMQ_SERVER_ADDRESS"))
+    sio = SocketIO(message_queue=rabbitmq_message_queue_url(app.config))
 
     processes = 0
     while processes < app.config.get("OTS_COT_PARSER_PROCESSES"):
