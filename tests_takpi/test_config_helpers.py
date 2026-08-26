@@ -91,3 +91,25 @@ def test_alt_names_accepts_no_extras():
 
 def test_alt_names_trims_whitespace():
     assert subject_alt_names(" 10.0.0.1 ", [" 10.0.0.2 "]) == "IP.1 = 10.0.0.1\nIP.2 = 10.0.0.2"
+
+
+# config.yml delivers this setting as plain text, while the environment variable arrives
+# already split. Both have to work, or a certificate ends up with one entry per character.
+
+
+def test_alt_names_accepts_comma_separated_text():
+    block = subject_alt_names("10.0.0.1", "10.0.0.2,10.0.0.3")
+    assert block == "IP.1 = 10.0.0.1\nIP.2 = 10.0.0.2\nIP.3 = 10.0.0.3"
+
+
+def test_alt_names_accepts_single_address_as_text():
+    assert subject_alt_names("10.0.0.1", "10.0.0.2") == "IP.1 = 10.0.0.1\nIP.2 = 10.0.0.2"
+
+
+def test_alt_names_text_tolerates_spaces_and_empties():
+    block = subject_alt_names("10.0.0.1", " 10.0.0.2 , , 10.0.0.3 ")
+    assert block == "IP.1 = 10.0.0.1\nIP.2 = 10.0.0.2\nIP.3 = 10.0.0.3"
+
+
+def test_alt_names_empty_text_changes_nothing():
+    assert subject_alt_names("10.0.0.1", "") == "IP.1 = 10.0.0.1"

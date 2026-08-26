@@ -96,6 +96,11 @@ def subject_alt_names(common_name, extra_addresses=None) -> str:
     Addresses keep the order given, the common name first, and duplicates are dropped.
     IP addresses and hostnames are numbered separately, as OpenSSL expects.
     """
+    # config.yml delivers this as plain text, the environment variable arrives already
+    # split. Iterating a string here would put one certificate entry per character.
+    if isinstance(extra_addresses, str):
+        extra_addresses = extra_addresses.split(",")
+
     addresses = [common_name]
     addresses.extend(extra_addresses or [])
 
