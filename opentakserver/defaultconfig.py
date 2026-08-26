@@ -57,6 +57,11 @@ class DefaultConfig:
     # How many CoT messages that cot_parser processes should prefetch. https://www.rabbitmq.com/docs/consumer-prefetch
     OTS_RABBITMQ_PREFETCH = 2
 
+    # Mumble Ice interface. Hard coded to localhost before, which only holds
+    # when Mumble and OpenTAKServer share a machine.
+    OTS_MUMBLE_ICE_HOST = os.getenv("OTS_MUMBLE_ICE_HOST", "127.0.0.1")
+    OTS_MUMBLE_ICE_PORT = int(os.getenv("OTS_MUMBLE_ICE_PORT", 6502))
+
     # TAK.gov account link settings
     OTS_TAK_GOV_LINKED = False
     OTS_TAK_GOV_ACCESS_TOKEN = ""
@@ -76,6 +81,10 @@ class DefaultConfig:
     OTS_CA_FOLDER = os.getenv("OTS_CA_FOLDER", os.path.join(OTS_DATA_FOLDER, "ca"))
     OTS_CA_PASSWORD = os.getenv("OTS_CA_PASSWORD", "atakatak")
     OTS_CA_EXPIRATION_TIME = int(os.getenv("OTS_CA_EXPIRATION_TIME", 3650))
+    # Start the validity of new certificates this many days in the past, so a
+    # device booting with a clock behind real time still accepts them.
+    # Zero disables backdating.
+    OTS_CERT_BACKDATE_DNI = int(os.getenv("OTS_CERT_BACKDATE_DNI", 0))
     OTS_CA_COUNTRY = os.getenv("OTS_CA_COUNTRY", "WW")
     OTS_CA_STATE = os.getenv("OTS_CA_STATE", "XX")
     OTS_CA_CITY = os.getenv("OTS_CA_CITY", "YY")

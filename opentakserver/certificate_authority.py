@@ -7,12 +7,15 @@ import subprocess
 import traceback
 import uuid
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from shutil import copyfile, rmtree
 from urllib.parse import urlparse
 
 from flask import request
 from jinja2 import Template
+
+from opentakserver.config_helpers import not_before_argument
 
 from .ca_config import ca_config, server_config
 
@@ -36,8 +39,12 @@ class CertificateAuthority:
                 self.app.config.get("OTS_CA_NAME")
             )
 
-            command = "openssl req -new -sha256 -x509 -days {} -extensions v3_ca -keyout {} -out {} -passout pass:{} -config {} -subj {}".format(
+            # Backdating keeps the certificate usable on devices whose clock
+            # runs behind. Two separate calls on purpose: the CA and an
+            # operator certificate are issued at different times.
+            command = "openssl req -new -sha256 -x509 -days {}{} -extensions v3_ca -keyout {} -out {} -passout pass:{} -config {} -subj {}".format(
                 self.app.config.get("OTS_CA_EXPIRATION_TIME"),
+                not_before_argument(self.app.config.get, datetime.now(timezone.utc)),
                 os.path.join(self.app.config.get("OTS_CA_FOLDER"), "ca-do-not-share.key"),
                 os.path.join(self.app.config.get("OTS_CA_FOLDER"), "ca.pem"),
                 self.app.config.get("OTS_CA_PASSWORD"),
@@ -291,8 +298,9 @@ class CertificateAuthority:
             config_file = os.path.join(self.app.config.get("OTS_CA_FOLDER"), "ca_config.cfg")
             extensions = "client"
 
-        command = "openssl x509 -sha256 -req -days {} -in {} -CA {} -CAkey {} -out {} -set_serial {} -passin pass:{} -extensions {} -extfile {}".format(
+        command = "openssl x509 -sha256 -req -days {}{} -in {} -CA {} -CAkey {} -out {} -set_serial {} -passin pass:{} -extensions {} -extfile {}".format(
             self.app.config.get("OTS_CA_EXPIRATION_TIME"),
+            not_before_argument(self.app.config.get, datetime.now(timezone.utc)),
             os.path.join(
                 self.app.config.get("OTS_CA_FOLDER"), "certs", common_name, common_name + ".csr"
             ),

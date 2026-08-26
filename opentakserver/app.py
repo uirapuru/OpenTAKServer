@@ -149,7 +149,7 @@ def init_extensions(app):
         app,
         logger=socketio_logger,
         ping_timeout=1,
-        message_queue=rabbitmq_message_queue_url(app.config),
+        message_queue=rabbitmq_message_queue_url(app.config.get),
     )
 
     rabbit_credentials = pika.PlainCredentials(

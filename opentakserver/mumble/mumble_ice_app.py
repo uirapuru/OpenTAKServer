@@ -4,6 +4,7 @@ from threading import Timer
 
 import Ice
 
+from opentakserver.config_helpers import mumble_ice_proxy
 from opentakserver.mumble.mumble_authenticator import MumbleAuthenticator
 
 # Load up Murmur slice file into Ice
@@ -37,14 +38,17 @@ class MumbleIceDaemon(threading.Thread):
 
         # Create Ice connection
         ice = Ice.initialize(idata)
-        proxy = ice.stringToProxy("Meta:tcp -h 127.0.0.1 -p 6502")
+        proxy_string = mumble_ice_proxy(self.app.config.get)
+        proxy = ice.stringToProxy(proxy_string)
         secret = ""
         if secret != "":
             ice.getImplicitContext().put("secret", secret)
         try:
             meta = Murmur.MetaPrx.checkedCast(proxy)
         except Ice.ConnectionRefusedException:
-            self.logger.error("Failed to connect to the mumble ice server")
+            self.logger.error(
+                "Failed to connect to the mumble ice server at {}".format(proxy_string)
+            )
             return
 
         mumble_ice_app = MumbleIceApp(self.app, self.logger, ice)
@@ -87,8 +91,9 @@ class MumbleIceApp(Ice.Application):
         # if False and 'ice_secret':
         #     self.ice.getImplicitContext().put("secret", "some_secret")
 
-        self.logger.debug("Connecting to Ice server ({}:{})".format("127.0.0.1", 6502))
-        base = self.ice.stringToProxy("Meta:tcp -h {} -p {}".format("127.0.0.1", 6502))
+        proxy_string = mumble_ice_proxy(self.app.config.get)
+        self.logger.debug("Connecting to Ice server ({})".format(proxy_string))
+        base = self.ice.stringToProxy(proxy_string)
         self.meta = Murmur.MetaPrx.uncheckedCast(base)
 
         adapter = self.ice.createObjectAdapterWithEndpoints("Callback.Client", "tcp -h 127.0.0.1")
