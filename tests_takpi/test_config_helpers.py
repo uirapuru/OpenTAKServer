@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from opentakserver.config_helpers import (
+    subject_alt_names,
     mumble_ice_proxy,
     not_before_argument,
     rabbitmq_message_queue_url,
@@ -48,3 +49,45 @@ def test_argument_is_shifted_back_by_the_configured_number_of_days():
 
 def test_negative_value_is_treated_as_off():
     assert not_before_argument({"OTS_CERT_BACKDATE_DNI": -5}.get, CHWILA) == ""
+
+
+# --- subject_alt_names -------------------------------------------------------------
+#
+# The server certificate used to carry a single address. A field server reachable both
+# over its own access point and over a VPN needs every address it answers on, or the TLS
+# handshake fails for whichever address was left out.
+
+
+def test_alt_names_single_ipv4():
+    assert subject_alt_names("192.168.4.1") == "IP.1 = 192.168.4.1"
+
+
+def test_alt_names_single_hostname():
+    assert subject_alt_names("takpi.local") == "DNS.1 = takpi.local"
+
+
+def test_alt_names_numbers_each_kind_separately():
+    block = subject_alt_names("192.168.4.1", ["100.64.0.5", "takpi.example"])
+    assert block == "IP.1 = 192.168.4.1\nIP.2 = 100.64.0.5\nDNS.1 = takpi.example"
+
+
+def test_alt_names_keeps_common_name_first():
+    block = subject_alt_names("10.0.0.1", ["10.0.0.2"])
+    assert block.splitlines()[0] == "IP.1 = 10.0.0.1"
+
+
+def test_alt_names_drops_duplicates():
+    block = subject_alt_names("10.0.0.1", ["10.0.0.1", "10.0.0.2", "10.0.0.2"])
+    assert block == "IP.1 = 10.0.0.1\nIP.2 = 10.0.0.2"
+
+
+def test_alt_names_ignores_blanks():
+    assert subject_alt_names("10.0.0.1", ["", None, "  "]) == "IP.1 = 10.0.0.1"
+
+
+def test_alt_names_accepts_no_extras():
+    assert subject_alt_names("10.0.0.1", None) == "IP.1 = 10.0.0.1"
+
+
+def test_alt_names_trims_whitespace():
+    assert subject_alt_names(" 10.0.0.1 ", [" 10.0.0.2 "]) == "IP.1 = 10.0.0.1\nIP.2 = 10.0.0.2"

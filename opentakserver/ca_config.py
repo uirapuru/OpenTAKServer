@@ -86,5 +86,5 @@ extendedKeyUsage = critical, clientAuth, serverAuth
 
 subjectAltName = @alt_names
 [alt_names]
-{{ alt_name_field }} = {{ common_name }}
+{{ alt_names }}
 """)

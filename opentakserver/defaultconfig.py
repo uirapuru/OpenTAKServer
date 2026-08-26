@@ -85,6 +85,12 @@ class DefaultConfig:
     # device booting with a clock behind real time still accepts them.
     # Zero disables backdating.
     OTS_CERT_BACKDATE_DNI = int(os.getenv("OTS_CERT_BACKDATE_DNI", 0))
+    # Further addresses the server certificate has to name, beyond the configured one.
+    # A field server answering both on its own access point and over a VPN needs each of
+    # them, or the handshake fails for whichever address was left out of the certificate.
+    OTS_DODATKOWE_ADRESY = [
+        a.strip() for a in os.getenv("OTS_DODATKOWE_ADRESY", "").split(",") if a.strip()
+    ]
     OTS_CA_COUNTRY = os.getenv("OTS_CA_COUNTRY", "WW")
     OTS_CA_STATE = os.getenv("OTS_CA_STATE", "XX")
     OTS_CA_CITY = os.getenv("OTS_CA_CITY", "YY")

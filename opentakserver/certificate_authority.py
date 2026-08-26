@@ -18,6 +18,7 @@ from jinja2 import Template
 from opentakserver.config_helpers import not_before_argument
 
 from .ca_config import ca_config, server_config
+from .config_helpers import subject_alt_names
 
 
 class CertificateAuthority:
@@ -268,10 +269,12 @@ class CertificateAuthority:
         f.close()
 
         if server:
-            if re.match("^[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}.[0-9]{1,3}$", common_name):
-                alt_name_field = "IP.1"
-            else:
-                alt_name_field = "DNS.1"
+            # Every address the server answers on goes into the certificate, not just the
+            # configured one. Without this a client reaching the server over a second
+            # address - a VPN link next to the local access point - fails the handshake.
+            alt_names = subject_alt_names(
+                common_name, self.app.config.get("OTS_DODATKOWE_ADRESY")
+            )
 
             f = open(
                 os.path.join(
@@ -283,7 +286,7 @@ class CertificateAuthority:
                 "w",
             )
 
-            f.write(server_config.render(alt_name_field=alt_name_field, common_name=common_name))
+            f.write(server_config.render(alt_names=alt_names))
 
             f.close()
 

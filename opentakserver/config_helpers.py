@@ -9,6 +9,7 @@ Each helper takes a getter - app.config.get, or dict.get in tests - instead of
 a mapping, so a plain dictionary is enough to exercise them.
 """
 
+import re
 from datetime import timedelta
 from urllib.parse import quote
 
@@ -79,3 +80,43 @@ def not_before_argument(config, now) -> str:
         return ""
 
     return " -not_before {}".format((now - timedelta(days=days)).strftime(NOT_BEFORE_FORMAT))
+
+
+_IPV4 = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
+
+
+def subject_alt_names(common_name, extra_addresses=None) -> str:
+    """Render the ``[alt_names]`` block of a server certificate configuration.
+
+    A field server is often reachable under more than one address: its own access point
+    on site, and a VPN address when it has a link to the outside. The certificate has to
+    name every one of them, because a client connecting on an address the certificate
+    does not carry aborts the TLS handshake.
+
+    Addresses keep the order given, the common name first, and duplicates are dropped.
+    IP addresses and hostnames are numbered separately, as OpenSSL expects.
+    """
+    addresses = [common_name]
+    addresses.extend(extra_addresses or [])
+
+    lines = []
+    seen = set()
+    ip_count = 0
+    dns_count = 0
+
+    for address in addresses:
+        if not address:
+            continue
+        address = str(address).strip()
+        if not address or address in seen:
+            continue
+        seen.add(address)
+
+        if _IPV4.match(address):
+            ip_count += 1
+            lines.append("IP.{} = {}".format(ip_count, address))
+        else:
+            dns_count += 1
+            lines.append("DNS.{} = {}".format(dns_count, address))
+
+    return "\n".join(lines)
