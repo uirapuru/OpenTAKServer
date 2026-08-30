@@ -125,3 +125,20 @@ def subject_alt_names(common_name, extra_addresses=None) -> str:
             lines.append("DNS.{} = {}".format(dns_count, address))
 
     return "\n".join(lines)
+
+
+def public_video_port(protocol, config) -> int:
+    """Return the port a client has to reach the stream at.
+
+    Not the port MediaMTX listens on: behind a NodePort or a reverse proxy the
+    two differ, and the stream list must carry the one the client can reach.
+
+    Anything that is not RTMP maps to the RTSP port. MediaMTX can report an SRT
+    or WebRTC source, but VideoStream.generate_xml forces the protocol to rtsp
+    for ATAK compatibility, so the RTSP port is the only useful answer there.
+
+    `config` is a getter - app.config.get, or dict.get in tests.
+    """
+    if protocol in ("rtmp", "rtmps"):
+        return config("OTS_VIDEO_PUBLIC_RTMP_PORT")
+    return config("OTS_VIDEO_PUBLIC_RTSP_PORT")

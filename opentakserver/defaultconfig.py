@@ -70,6 +70,16 @@ class DefaultConfig:
     OTS_MEDIAMTX_ENABLE = os.getenv("OTS_MEDIAMTX_ENABLE", "True").lower() in ["true", "1", "yes"]
     OTS_MEDIAMTX_API_ADDRESS = os.getenv("OTS_MEDIAMTX_API_ADDRESS", "http://localhost:9997")
     OTS_MEDIAMTX_TOKEN = os.getenv("OTS_MEDIAMTX_TOKEN", secrets.token_urlsafe(30 * 3 // 4))
+    # RTSP and RTMP ports ADVERTISED to clients in the stream list (/Marti/vcm
+    # and /api/video_streams). These are not the ports MediaMTX listens on -
+    # they are the ports a client has to reach it at. On a single-host install
+    # both numbers are the same, which is why they used to be literals. Behind
+    # any network indirection (a Kubernetes NodePort, a port forward, a reverse
+    # proxy) they differ, and the client was handed an address nothing answers
+    # on. The defaults are the former literals, so an install that sets neither
+    # variable behaves exactly as before.
+    OTS_VIDEO_PUBLIC_RTSP_PORT = int(os.getenv("OTS_VIDEO_PUBLIC_RTSP_PORT", 8554))
+    OTS_VIDEO_PUBLIC_RTMP_PORT = int(os.getenv("OTS_VIDEO_PUBLIC_RTMP_PORT", 1935))
     OTS_SSL_VERIFICATION_MODE = int(os.getenv("OTS_SSL_VERIFICATION_MODE", 2))
     OTS_SSL_CERT_HEADER = os.getenv("OTS_SSL_CERT_HEADER", "X-Ssl-Cert")
     OTS_NODE_ID = os.getenv(

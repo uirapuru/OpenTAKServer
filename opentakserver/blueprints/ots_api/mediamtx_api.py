@@ -20,6 +20,7 @@ from flask_security.utils import parse_auth_token
 from sqlalchemy import update
 from werkzeug.datastructures import ImmutableMultiDict
 
+from opentakserver.config_helpers import public_video_port
 from opentakserver.extensions import db, ldap_manager, logger
 from opentakserver.forms.MediaMTXPathConfig import MediaMTXPathConfig
 from opentakserver.models.VideoRecording import VideoRecording
@@ -86,10 +87,7 @@ def mediamtx_webhook():
                     video_stream = VideoStream()
                     video_stream.protocol = get_stream_protocol(path["source"]["type"])
 
-                    r = requests.get(
-                        "{}/v3/config/global/get".format(app.config.get("OTS_MEDIAMTX_API_ADDRESS"))
-                    )
-                    video_stream.port = r.json()["rtspAddress"].replace(":", "")
+                    video_stream.port = public_video_port(video_stream.protocol, app.config.get)
 
                     r = requests.get(
                         "{}/v3/config/paths/get/{}".format(
@@ -155,7 +153,7 @@ def mediamtx_webhook():
                 video_stream.protocol = "webrtc"
 
             # video_stream.query = query
-            video_stream.port = rtsp_port
+            video_stream.port = public_video_port(video_stream.protocol, app.config.get)
             video_stream.path = path
             video_stream.alias = path
             video_stream.rtsp_reliable = 1
@@ -498,11 +496,11 @@ def external_auth():
             path_config["sourceOnDemand"] = False
             v.mediamtx_settings = json.dumps(path_config)
 
-            if v.protocol == "rtsp":
-                v.port = 8554
+            if v.protocol in ("rtsp", "rtsps"):
+                v.port = public_video_port("rtsp", app.config.get)
                 v.rtsp_reliable = 1
-            elif v.protocol == "rtmp":
-                v.port = 1935
+            elif v.protocol in ("rtmp", "rtmps"):
+                v.port = public_video_port("rtmp", app.config.get)
                 v.rtsp_reliable = 1
             else:
                 v.rtsp_reliable = 0
