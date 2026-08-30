@@ -507,48 +507,29 @@ def external_auth():
 
             v.generate_xml(request.json.get("ip"))
 
+            # The path is NOT registered with MediaMTX here, on purpose.
+            #
+            # This hook runs in the middle of the publisher's handshake:
+            # MediaMTX asks who the client is, and only lets it announce the
+            # stream once this call returns. Posting to /v3/config/paths/add
+            # makes MediaMTX reload its whole configuration, and a reload
+            # during a handshake closes the connection with "configuration has
+            # changed". The result was that the FIRST publish to any new path
+            # always failed and only a retry worked - measured 2026-08-30 on
+            # a Kubernetes deployment, reproducible every time.
+            #
+            # The path registration is not lost: the runOnReady webhook fires
+            # once the stream is online and patches the path config there,
+            # where a reload is harmless. Publishing itself never needed the
+            # explicit path - MediaMTX accepts it under pathDefaults.
             with app.app_context():
                 try:
-
                     db.session.add(v)
                     db.session.commit()
-                    r = requests.post(
-                        "{}/v3/config/paths/add/{}".format(
-                            app.config.get("OTS_MEDIAMTX_API_ADDRESS"), v.path
-                        ),
-                        json=path_config,
-                    )
-                    if r.status_code == 200:
-                        logger.debug("Added path {} to mediamtx".format(v.path))
-                    else:
-                        logger.error(
-                            "Failed to add path {} to mediamtx. Status code {} {}".format(
-                                v.path, r.status_code, r.text
-                            )
-                        )
                     logger.debug("Inserted video stream {}".format(v.uid))
-                except sqlalchemy.exc.IntegrityError as e:
-                    try:
-                        db.session.rollback()
-                        video = (
-                            db.session.query(VideoStream).filter(VideoStream.path == v.path).first()
-                        )
-                        r = requests.post(
-                            "{}/v3/config/paths/add/{}".format(
-                                app.config.get("OTS_MEDIAMTX_API_ADDRESS"), v.path
-                            ),
-                            json=json.loads(video.mediamtx_settings),
-                        )
-                        if r.status_code == 200:
-                            logger.debug("Added path {} to mediamtx".format(v.path))
-                        else:
-                            logger.error(
-                                "Failed to add path {} to mediamtx. Status code {} {}".format(
-                                    v.path, r.status_code, r.text
-                                )
-                            )
-                    except:
-                        logger.error(traceback.format_exc())
+                except sqlalchemy.exc.IntegrityError:
+                    db.session.rollback()
+                    logger.debug("Video stream {} already known".format(v.path))
 
         logger.debug("external_auth returning 200")
         return "", 200
