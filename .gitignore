@@ -168,3 +168,8 @@ instance/*
 .webassets-cache
 .env
 
+
+# Obszary robocze i srodowiska testowe Claude Code
+.claude/
+.venv-test/
+.superpowers/
