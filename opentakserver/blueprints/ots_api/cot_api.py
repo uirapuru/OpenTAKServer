@@ -110,6 +110,22 @@ def send_cot():
 
     stale = timestamp + timedelta(seconds=stale_seconds)
 
+    _persist_event(
+        event, cot_type, callsign, timestamp, stale, latitude, longitude, ce, hae, le, body["uid"]
+    )
+
+    return jsonify({"success": True, "uid": event.get("uid")}), 201
+
+
+def _persist_event(
+    event, cot_type, callsign, timestamp, stale, latitude, longitude, ce, hae, le, uid
+):
+    """Write the CoT/Point rows, and a Marker row for atom types, for a built event.
+
+    A repeated ``uid`` for an atom type moves the existing Marker to the new
+    point/cot rather than being rejected, matching how /api/markers already
+    treats a re-sent marker uid.
+    """
     cot_row = db.session.execute(
         insert(CoT).values(
             how="m-g",
@@ -144,7 +160,7 @@ def send_cot():
 
     if is_marker_type(cot_type):
         marker = Marker()
-        marker.uid = body["uid"]
+        marker.uid = uid
         marker.callsign = callsign
         marker.affiliation = get_affiliation(cot_type)
         marker.battle_dimension = get_battle_dimension(cot_type)
@@ -165,5 +181,3 @@ def send_cot():
                 .values(point_id=marker.point_id, cot_id=marker.cot_id, **marker.serialize())
             )
             db.session.commit()
-
-    return jsonify({"success": True, "uid": event.get("uid")}), 201
