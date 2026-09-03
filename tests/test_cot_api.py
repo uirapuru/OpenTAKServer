@@ -69,6 +69,19 @@ def test_chat_event_with_a_dict_detail_succeeds(auth):
     assert response.json["uid"] == body["uid"]
 
 
+def test_chat_event_with_an_empty_message_is_rejected(auth):
+    """Without a message the event carries no <remarks> and cot_parser drops it."""
+    response = auth.post("/api/cot", json=request_body(type="b-t-f", detail={"message": "  "}))
+    assert response.status_code == 400
+    assert response.json["success"] is False
+
+
+def test_chat_event_without_a_message_is_rejected(auth):
+    response = auth.post("/api/cot", json=request_body(type="b-t-f", detail={}))
+    assert response.status_code == 400
+    assert response.json["success"] is False
+
+
 def test_chat_event_with_a_string_detail_is_rejected(auth):
     response = auth.post("/api/cot", json=request_body(type="b-t-f", detail="zbiorka"))
     assert response.status_code == 400

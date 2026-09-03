@@ -3,6 +3,7 @@
 No Flask, no database, no broker. Everything here is unit testable on its own.
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from xml.etree import ElementTree as ET
 
@@ -11,24 +12,48 @@ from opentakserver.config_helpers import iso8601_string_from_datetime
 DEFAULT_STALE_SECONDS = 86400
 UNKNOWN_ERROR_VALUE = 9999999.0
 
+# The chat room every message from the operator panel goes to. ATAK broadcasts
+# to this room by name, and cot_parser stores it as the Chatroom row.
+ALL_CHAT_ROOMS = "All Chat Rooms"
+
+
+@dataclass(frozen=True)
+class CotTypeSpec:
+    """How one supported CoT type is built.
+
+    ``kind`` drives the shape of the <detail> block. ``alert_label`` is the
+    human readable emergency name ATAK puts in <emergency type="...">; it is
+    only set for alert types. The labels below were read out of the decompiled
+    ATAK 5.7 client, not out of published CoT documentation, which disagrees
+    about which label belongs to b-a-o-tbl and which to b-a-o-opn.
+    """
+
+    kind: str
+    alert_label: str | None = None
+
+
 SUPPORTED_TYPES = {
-    "a-h-G": "marker",
-    "a-f-G": "marker",
-    "a-u-G": "marker",
-    "a-n-G": "marker",
-    "a-h-G-E-V": "marker",
-    "a-h-A": "marker",
-    "a-u-A-M-F-Q-r": "marker",
-    "a-h-G-I": "marker",
-    "b-m-p-s-p-i": "marker",
-    "b-m-p-w": "marker",
-    "b-a-o-tbl": "alert",
-    "b-a-o-opn": "alert",
-    "b-a-o-pan": "alert",
-    "b-a-o-can": "alert",
-    "b-a-g": "alert",
-    "b-t-f": "chat",
+    "a-h-G": CotTypeSpec("marker"),
+    "a-f-G": CotTypeSpec("marker"),
+    "a-u-G": CotTypeSpec("marker"),
+    "a-n-G": CotTypeSpec("marker"),
+    "a-h-G-E-V": CotTypeSpec("marker"),
+    "a-h-A": CotTypeSpec("marker"),
+    "a-u-A-M-F-Q-r": CotTypeSpec("marker"),
+    "a-h-G-I": CotTypeSpec("marker"),
+    "b-m-p-s-p-i": CotTypeSpec("marker"),
+    "b-m-p-w": CotTypeSpec("marker"),
+    "b-a-o-tbl": CotTypeSpec("alert", "911 Alert"),
+    "b-a-o-opn": CotTypeSpec("alert", "In Contact"),
+    "b-a-o-pan": CotTypeSpec("alert", "Ring The Bell"),
+    "b-a-o-can": CotTypeSpec("alert", "Cancel Alert"),
+    "b-a-g": CotTypeSpec("alert", "Geo-fence Breached"),
+    "b-t-f": CotTypeSpec("chat"),
 }
+
+# b-a-o-can retracts the sender's last open alert. cot_parser.parse_alert takes
+# that branch on the presence of a "cancel" attribute, never on a type label.
+CANCEL_ALERT_TYPE = "b-a-o-can"
 
 
 def is_marker_type(cot_type):
@@ -77,16 +102,53 @@ def build_event(
     contact = ET.SubElement(detail_element, "contact")
     contact.set("callsign", callsign)
 
+    spec = SUPPORTED_TYPES[cot_type]
     text = remarks
-    if SUPPORTED_TYPES[cot_type] == "chat":
-        message = (detail or {}).get("message", "")
+    remarks_attributes = {}
+
+    if spec.kind == "alert":
+        # cot_parser.parse_alert ignores an event without <emergency>, so every
+        # alert type has to carry one. The callsign is the element's text
+        # because that is where ATAK puts the name of whoever raised the alert.
+        emergency = ET.SubElement(detail_element, "emergency")
+        if cot_type == CANCEL_ALERT_TYPE:
+            emergency.set("cancel", "true")
+        else:
+            emergency.set("type", spec.alert_label)
+        emergency.text = callsign
+
+    if spec.kind == "chat":
+        message = str((detail or {}).get("message", "") or "").strip()
+        if not message:
+            # An empty message would emit no <remarks>, and cot_parser.parse_geochat
+            # returns early without one, so the message would be dropped in silence
+            # while the caller was told it was sent.
+            raise ValueError("A chat event needs a non-empty detail.message")
+
         chat = ET.SubElement(detail_element, "__chat")
         chat.set("senderCallsign", callsign)
         chat.set("id", uid)
-        chat.set("chatroom", "All Chat Rooms")
+        chat.set("chatroom", ALL_CHAT_ROOMS)
+
+        # cot_parser.parse_geochat reads chatgrp["uid0"] as the sender uid and
+        # raises AttributeError without a <chatgrp>, which abandons the whole
+        # message. The panel has no separate device uid for itself, so the
+        # event's own uid is the sender uid.
+        chat_group = ET.SubElement(detail_element, "chatgrp")
+        chat_group.set("uid0", uid)
+        chat_group.set("uid1", ALL_CHAT_ROOMS)
+        chat_group.set("id", ALL_CHAT_ROOMS)
+
         text = message
+        # parse_geochat reads remarks["time"] for the GeoChat timestamp.
+        remarks_attributes = {
+            "time": iso8601_string_from_datetime(timestamp),
+            "source": uid,
+            "to": ALL_CHAT_ROOMS,
+        }
 
     if text:
-        ET.SubElement(detail_element, "remarks").text = text
+        remarks_element = ET.SubElement(detail_element, "remarks", remarks_attributes)
+        remarks_element.text = text
 
     return event
