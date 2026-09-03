@@ -32,6 +32,10 @@ cot_send_api_blueprint = Blueprint("cot_send_api", __name__)
 
 UNKNOWN_ERROR_VALUE = 9999999.0
 
+# Thirty days. Anything longer is a mistake rather than a lifetime anyone wants,
+# and a large enough value overflows timedelta instead of building an event.
+MAX_STALE_SECONDS = 2592000
+
 
 def _error(message):
     return jsonify({"success": False, "error": message}), 400
@@ -88,12 +92,21 @@ def send_cot():
     remarks = bleach.clean(str(body["remarks"])) if body.get("remarks") else None
 
     timestamp = datetime.now(timezone.utc)
-    stale_seconds = int(body.get("stale_seconds", DEFAULT_STALE_SECONDS))
-    ce = _read_float(body, "ce", UNKNOWN_ERROR_VALUE)
-    hae = _read_float(body, "hae", UNKNOWN_ERROR_VALUE)
-    le = _read_float(body, "le", UNKNOWN_ERROR_VALUE)
 
+    # The numeric coercions belong inside the guard: a careless value has to come
+    # back as the documented 400, not as an uncaught exception and a 500 page.
+    # OverflowError is here because a huge stale_seconds overflows timedelta.
     try:
+        stale_seconds = int(body.get("stale_seconds", DEFAULT_STALE_SECONDS))
+        ce = _read_float(body, "ce", UNKNOWN_ERROR_VALUE)
+        hae = _read_float(body, "hae", UNKNOWN_ERROR_VALUE)
+        le = _read_float(body, "le", UNKNOWN_ERROR_VALUE)
+
+        if not 0 < stale_seconds <= MAX_STALE_SECONDS:
+            return _error(
+                f"stale_seconds must be between 1 and {MAX_STALE_SECONDS}: {stale_seconds}"
+            )
+
         event = build_event(
             cot_type=cot_type,
             uid=body["uid"],
@@ -108,7 +121,7 @@ def send_cot():
             remarks=remarks,
             detail=body.get("detail"),
         )
-    except (ValueError, TypeError) as error:
+    except (ValueError, TypeError, OverflowError) as error:
         logger.error(f"Failed to build CoT: {error}")
         logger.error(traceback.format_exc())
         return _error(f"Failed to build CoT: {error}")

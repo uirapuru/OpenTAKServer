@@ -55,6 +55,60 @@ def test_missing_coordinates_are_rejected(auth):
     assert response.status_code == 400
 
 
+def test_non_numeric_stale_seconds_is_rejected(auth):
+    response = auth.post("/api/cot", json=request_body(stale_seconds="abc"))
+    assert response.status_code == 400
+    assert response.json["success"] is False
+
+
+def test_null_stale_seconds_is_rejected(auth):
+    response = auth.post("/api/cot", json=request_body(stale_seconds=None))
+    assert response.status_code == 400
+    assert response.json["success"] is False
+
+
+def test_negative_stale_seconds_is_rejected(auth):
+    response = auth.post("/api/cot", json=request_body(stale_seconds=-1))
+    assert response.status_code == 400
+
+
+def test_zero_stale_seconds_is_rejected(auth):
+    response = auth.post("/api/cot", json=request_body(stale_seconds=0))
+    assert response.status_code == 400
+
+
+def test_absurdly_large_stale_seconds_is_rejected(auth):
+    """1e30 overflows timedelta, which used to escape as an uncaught OverflowError."""
+    response = auth.post("/api/cot", json=request_body(stale_seconds=10**30))
+    assert response.status_code == 400
+    assert response.json["success"] is False
+
+
+def test_stale_seconds_at_the_ceiling_is_accepted(auth):
+    from opentakserver.blueprints.ots_api.cot_api import MAX_STALE_SECONDS
+
+    response = auth.post("/api/cot", json=request_body(stale_seconds=MAX_STALE_SECONDS))
+    assert response.status_code == 201
+
+
+def test_stale_seconds_above_the_ceiling_is_rejected(auth):
+    from opentakserver.blueprints.ots_api.cot_api import MAX_STALE_SECONDS
+
+    response = auth.post("/api/cot", json=request_body(stale_seconds=MAX_STALE_SECONDS + 1))
+    assert response.status_code == 400
+
+
+def test_non_numeric_error_value_is_rejected(auth):
+    response = auth.post("/api/cot", json=request_body(ce="x"))
+    assert response.status_code == 400
+    assert response.json["success"] is False
+
+
+def test_null_error_value_is_rejected(auth):
+    response = auth.post("/api/cot", json=request_body(hae=None))
+    assert response.status_code == 400
+
+
 def test_callsign_defaults_to_the_logged_in_user(auth):
     body = request_body()
     del body["callsign"]
