@@ -4,6 +4,7 @@ from flask import jsonify, request
 
 from opentakserver.blueprints.ots_api.api import api_blueprint
 from opentakserver.blueprints.ots_api.casevac_api import casevac_api_blueprint
+from opentakserver.blueprints.ots_api.cot_api import cot_send_api_blueprint
 from opentakserver.blueprints.ots_api.data_package_api import data_package_api
 from opentakserver.blueprints.ots_api.device_profile_api import device_profile_api_blueprint
 from opentakserver.blueprints.ots_api.eud_stats_api import eud_stats_blueprint
@@ -26,6 +27,7 @@ from .tak_gov_link_api import tak_gov_link_blueprint
 ots_api = Blueprint("ots_api", __name__)
 ots_api.register_blueprint(api_blueprint)
 ots_api.register_blueprint(casevac_api_blueprint)
+ots_api.register_blueprint(cot_send_api_blueprint)
 ots_api.register_blueprint(data_package_api)
 ots_api.register_blueprint(device_profile_api_blueprint)
 ots_api.register_blueprint(marker_api_blueprint)
