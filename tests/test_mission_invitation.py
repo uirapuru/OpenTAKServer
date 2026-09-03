@@ -49,6 +49,34 @@ def test_role_is_a_single_object():
     assert MissionRole.MISSION_READ in role["permissions"]
 
 
+def test_role_says_what_the_row_grants():
+    """Every invitation used to report a subscriber role, so the owner of a
+    mission was told they may only read and write it."""
+    invitation = build(client_uid="ANDROID-1234", role=MissionRole.MISSION_OWNER)
+
+    role = invitation.to_marti_json()["role"]
+
+    assert role["type"] == MissionRole.MISSION_OWNER
+    assert MissionRole.MISSION_DELETE in role["permissions"]
+
+
+def test_role_carries_its_name_as_well_as_its_type():
+    """TAK Server sends the role name as type; CloudTAK reads name and drops
+    every key its schema does not know, showing "Unknown Role" without it."""
+    role = build(client_uid="ANDROID-1234").to_marti_json()["role"]
+
+    assert role["name"] == role["type"]
+
+
+def test_role_permissions_are_a_copy():
+    """The role dicts live on the MissionRole class. Handing one out means a
+    caller who edits it changes the role for every later invitation."""
+    role = build(client_uid="ANDROID-1234").to_marti_json()["role"]
+    role["permissions"].append("MISSION_DELETE")
+
+    assert MissionRole.MISSION_DELETE not in MissionRole.SUBSCRIBER_ROLE["permissions"]
+
+
 def test_invitee_follows_the_invitation_type():
     """TAK Server names the invited party by UID, by username or by team name,
     depending on the type - reading one column for every type would leave the

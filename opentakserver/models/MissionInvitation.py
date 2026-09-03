@@ -81,13 +81,40 @@ class MissionInvitation(db.Model):
             or self.team_name or self.group_name
         )
 
+    def role_json(self) -> dict:
+        """Spell out the role this invitation was written with.
+
+        The row records which role it grants, so reporting every invitation as
+        a subscriber understated what the owner of a mission may do with it.
+
+        The permission list is copied, not handed out: the source dicts live on
+        the MissionRole class and a caller editing one would change the role for
+        every invitation the server ever answers with.
+
+        Both name and type carry the role name. TAK Server sends type, CloudTAK
+        reads name and drops every key its schema does not know - given only
+        type it shows the role as "Unknown Role".
+        """
+        by_role = {
+            MissionRole.MISSION_OWNER: MissionRole.OWNER_ROLE,
+            MissionRole.MISSION_READ_ONLY: MissionRole.READ_ONLY_ROLE,
+            MissionRole.MISSION_SUBSCRIBER: MissionRole.SUBSCRIBER_ROLE,
+        }
+        role = by_role.get(self.role, MissionRole.SUBSCRIBER_ROLE)
+
+        return {
+            "name": role["type"],
+            "type": role["type"],
+            "permissions": list(role["permissions"]),
+        }
+
     def to_marti_json(self):
         json = {
             "missionName": self.mission_name,
             # A role is a single object, not a list of role names. Clients
             # read its permissions to decide what the invited party may do;
             # a list makes the invitation unreadable to them.
-            "role": MissionRole.SUBSCRIBER_ROLE,
+            "role": self.role_json(),
             "type": self.type,
             "creatorUid": self.creator_uid,
             "createTime": iso8601_string_from_datetime(),
