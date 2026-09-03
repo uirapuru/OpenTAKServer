@@ -10,7 +10,7 @@ a mapping, so a plain dictionary is enough to exercise them.
 """
 
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 NOT_BEFORE_FORMAT = "%y%m%d%H%M%SZ"
@@ -142,3 +142,15 @@ def public_video_port(protocol, config) -> int:
     if protocol in ("rtmp", "rtmps"):
         return config("OTS_VIDEO_PUBLIC_RTMP_PORT")
     return config("OTS_VIDEO_PUBLIC_RTSP_PORT")
+
+
+def iso8601_string_from_datetime(datetime_object: datetime | None = None) -> str:
+    """Format a datetime as ISO 8601 with 4-digit microseconds precision, or the current time.
+
+    When called without an argument, uses the current UTC time. This is the format used
+    throughout OTS for CoT event timestamps to ensure consistency across all event types.
+    """
+    if datetime_object:
+        return datetime_object.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-2] + "Z"
+    else:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-2] + "Z"

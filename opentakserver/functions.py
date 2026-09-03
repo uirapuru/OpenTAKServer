@@ -9,7 +9,10 @@ from flask import current_app as app
 
 # Re-exported so existing imports keep working; the body lives in a module that
 # only needs the standard library.
-from opentakserver.config_helpers import rabbitmq_message_queue_url  # noqa: F401
+from opentakserver.config_helpers import (  # noqa: F401
+    iso8601_string_from_datetime,
+    rabbitmq_message_queue_url,
+)
 
 ISO8601_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 ISO8601_FORMAT_NO_MICROSECONDS = "%Y-%m-%dT%H:%M:%SZ"
@@ -144,13 +147,6 @@ def datetime_from_iso8601_string(datetime_string: str | None) -> datetime:
         dt = datetime.strptime(datetime_string, ISO8601_FORMAT_NO_MICROSECONDS)
         dt = dt.replace(tzinfo=timezone.utc)
         return dt
-
-
-def iso8601_string_from_datetime(datetime_object: datetime | None = None) -> str:
-    if datetime_object:
-        return datetime_object.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-2] + "Z"
-    else:
-        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-2] + "Z"
 
 
 def iso8601_string_from_datetime_no_ms(datetime_object):

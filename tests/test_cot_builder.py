@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from datetime import datetime, timezone
 from xml.etree import ElementTree as ET
 
@@ -72,3 +74,33 @@ def test_unknown_type_is_rejected():
 
 def test_event_serialises_to_wellformed_xml():
     ET.fromstring(ET.tostring(build()))
+
+
+def test_cot_builder_is_pure_no_heavy_imports():
+    """Verify that importing cot_builder does not pull in flask or pika.
+
+    The whole point of the pure layer is that tests can run without a full
+    OpenTAKServer installation. This test fails if someone reintroduces a
+    heavy import at module scope.
+    """
+    # Import in a subprocess with a clean sys.modules to ensure no hidden
+    # import chains from the current process affect the test.
+    code = """
+import sys
+try:
+    import opentakserver.cot_builder
+    has_flask = 'flask' in sys.modules
+    has_pika = 'pika' in sys.modules
+    print(f"flask={has_flask};pika={has_pika}")
+except Exception as e:
+    print(f"error={e}")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        cwd="/home/uirapuru/OpenTAKServer-fork/.claude/worktrees/komunikaty-cot",
+    )
+    assert result.returncode == 0, f"Import failed: {result.stderr}"
+    output = result.stdout.strip()
+    assert output == "flask=False;pika=False", f"Heavy imports detected: {output}"

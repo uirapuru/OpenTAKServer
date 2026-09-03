@@ -6,7 +6,7 @@ No Flask, no database, no broker. Everything here is unit testable on its own.
 from datetime import datetime, timedelta
 from xml.etree import ElementTree as ET
 
-from opentakserver.functions import iso8601_string_from_datetime
+from opentakserver.config_helpers import iso8601_string_from_datetime
 
 DEFAULT_STALE_SECONDS = 86400
 UNKNOWN_ERROR_VALUE = 9999999.0
