@@ -1,16 +1,21 @@
 """POST /api/cot - send an arbitrary supported CoT event to the connected clients."""
 
+import json
 import traceback
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 from xml.etree import ElementTree as ET
 
 import bleach
-from flask import Blueprint, jsonify, request
+import pika
+from flask import Blueprint
+from flask import current_app as app
+from flask import jsonify, request
 from flask_security import auth_required, current_user
 from sqlalchemy import insert, update
 from sqlalchemy.exc import IntegrityError
 
+from opentakserver.blueprints.ots_api.api import route_cot
 from opentakserver.cot_builder import (
     DEFAULT_STALE_SECONDS,
     SUPPORTED_TYPES,
@@ -113,8 +118,39 @@ def send_cot():
     _persist_event(
         event, cot_type, callsign, timestamp, stale, latitude, longitude, ce, hae, le, body["uid"]
     )
+    _publish_event(event)
 
     return jsonify({"success": True, "uid": event.get("uid")}), 201
+
+
+def _publish_event(event):
+    """Publish a built CoT event to the connected clients.
+
+    Publishes onto the ``cot_parser`` exchange (feeds the record-building
+    process) and the ``firehose`` exchange (general subscription stream),
+    then hands the event to ``route_cot`` so it reaches the sender's groups.
+    """
+    xml = ET.tostring(event).decode("utf-8")
+    payload = json.dumps({"cot": xml, "uid": app.config["OTS_NODE_ID"]})
+    properties = pika.BasicProperties(expiration=app.config.get("OTS_RABBITMQ_TTL"))
+
+    credentials = pika.PlainCredentials(
+        app.config.get("OTS_RABBITMQ_USERNAME"), app.config.get("OTS_RABBITMQ_PASSWORD")
+    )
+    connection = pika.BlockingConnection(
+        pika.ConnectionParameters(
+            host=app.config.get("OTS_RABBITMQ_SERVER_ADDRESS"), credentials=credentials
+        )
+    )
+    channel = connection.channel()
+    channel.basic_publish(
+        exchange="cot_parser", routing_key="cot_parser", body=payload, properties=properties
+    )
+    channel.basic_publish(exchange="firehose", routing_key="", body=payload, properties=properties)
+    channel.close()
+    connection.close()
+
+    route_cot(xml, current_user)
 
 
 def _persist_event(

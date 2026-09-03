@@ -164,3 +164,34 @@ def test_resending_the_same_atom_uid_moves_the_marker(auth, app):
         assert marker.cot_id != first_cot_id
         assert abs(marker.point.latitude - 30.0) < 1e-9
         assert abs(marker.point.longitude - 40.0) < 1e-9
+
+
+def test_event_is_published_to_all_three_exchanges(auth, monkeypatch):
+    import opentakserver.blueprints.ots_api.cot_api as modul
+
+    wyslane = []
+
+    class AtrapaKanalu:
+        def basic_publish(self, exchange, routing_key, body, properties=None):
+            wyslane.append(exchange)
+
+        def close(self):
+            pass
+
+    class AtrapaPolaczenia:
+        def channel(self):
+            return AtrapaKanalu()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(modul.pika, "BlockingConnection", lambda *a, **k: AtrapaPolaczenia())
+
+    import opentakserver.blueprints.ots_api.api as api_modul
+
+    monkeypatch.setattr(api_modul.pika, "BlockingConnection", lambda *a, **k: AtrapaPolaczenia())
+
+    assert auth.post("/api/cot", json=zadanie()).status_code == 201
+    assert "cot_parser" in wyslane
+    assert "firehose" in wyslane
+    assert "groups" in wyslane
