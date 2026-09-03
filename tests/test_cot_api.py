@@ -1,6 +1,6 @@
 import uuid
 
-POPRAWNE = {
+VALID_BODY = {
     "type": "a-h-G",
     "latitude": 52.1,
     "longitude": 21.0,
@@ -8,76 +8,76 @@ POPRAWNE = {
 }
 
 
-def zadanie(**zmiany):
-    tresc = dict(POPRAWNE)
-    tresc["uid"] = str(uuid.uuid4())
-    tresc.update(zmiany)
-    return tresc
+def request_body(**overrides):
+    body = dict(VALID_BODY)
+    body["uid"] = str(uuid.uuid4())
+    body.update(overrides)
+    return body
 
 
 def test_requires_authentication(client):
-    response = client.post("/api/cot", json=zadanie())
+    response = client.post("/api/cot", json=request_body())
     assert response.status_code in (302, 401)
 
 
 def test_accepts_a_valid_marker(auth):
-    tresc = zadanie()
-    response = auth.post("/api/cot", json=tresc)
+    body = request_body()
+    response = auth.post("/api/cot", json=body)
     assert response.status_code == 201
-    assert response.json["uid"] == tresc["uid"]
+    assert response.json["uid"] == body["uid"]
 
 
 def test_rejects_a_type_outside_the_whitelist(auth):
-    response = auth.post("/api/cot", json=zadanie(type="a-x-Q"))
+    response = auth.post("/api/cot", json=request_body(type="a-x-Q"))
     assert response.status_code == 400
     assert response.json["success"] is False
 
 
 def test_rejects_a_uid_that_is_not_uuid4(auth):
-    response = auth.post("/api/cot", json=zadanie(uid="nie-uuid"))
+    response = auth.post("/api/cot", json=request_body(uid="nie-uuid"))
     assert response.status_code == 400
 
 
 def test_rejects_latitude_outside_the_range(auth):
-    response = auth.post("/api/cot", json=zadanie(latitude=91.0))
+    response = auth.post("/api/cot", json=request_body(latitude=91.0))
     assert response.status_code == 400
 
 
 def test_rejects_longitude_outside_the_range(auth):
-    response = auth.post("/api/cot", json=zadanie(longitude=181.0))
+    response = auth.post("/api/cot", json=request_body(longitude=181.0))
     assert response.status_code == 400
 
 
 def test_missing_coordinates_are_rejected(auth):
-    tresc = zadanie()
-    del tresc["latitude"]
-    response = auth.post("/api/cot", json=tresc)
+    body = request_body()
+    del body["latitude"]
+    response = auth.post("/api/cot", json=body)
     assert response.status_code == 400
 
 
 def test_callsign_defaults_to_the_logged_in_user(auth):
-    tresc = zadanie()
-    del tresc["callsign"]
-    response = auth.post("/api/cot", json=tresc)
+    body = request_body()
+    del body["callsign"]
+    response = auth.post("/api/cot", json=body)
     assert response.status_code == 201
 
 
 def test_chat_event_with_a_dict_detail_succeeds(auth):
-    tresc = zadanie(type="b-t-f", detail={"message": "zbiorka"})
-    response = auth.post("/api/cot", json=tresc)
+    body = request_body(type="b-t-f", detail={"message": "zbiorka"})
+    response = auth.post("/api/cot", json=body)
     assert response.status_code == 201
-    assert response.json["uid"] == tresc["uid"]
+    assert response.json["uid"] == body["uid"]
 
 
 def test_chat_event_with_a_string_detail_is_rejected(auth):
-    response = auth.post("/api/cot", json=zadanie(type="b-t-f", detail="zbiorka"))
+    response = auth.post("/api/cot", json=request_body(type="b-t-f", detail="zbiorka"))
     assert response.status_code == 400
     assert response.json["success"] is False
     assert "detail" in response.json["error"].lower()
 
 
 def test_chat_event_with_a_list_detail_is_rejected(auth):
-    response = auth.post("/api/cot", json=zadanie(type="b-t-f", detail=[1, 2, 3]))
+    response = auth.post("/api/cot", json=request_body(type="b-t-f", detail=[1, 2, 3]))
     assert response.status_code == 400
     assert response.json["success"] is False
     assert "detail" in response.json["error"].lower()
@@ -88,12 +88,12 @@ def test_atom_type_creates_a_marker_row(auth, app):
     from opentakserver.models.CoT import CoT
     from opentakserver.models.Marker import Marker
 
-    tresc = zadanie()
-    assert auth.post("/api/cot", json=tresc).status_code == 201
+    body = request_body()
+    assert auth.post("/api/cot", json=body).status_code == 201
 
     with app.app_context():
         marker = db.session.execute(
-            db.session.query(Marker).filter_by(uid=tresc["uid"])
+            db.session.query(Marker).filter_by(uid=body["uid"])
         ).first()
         assert marker is not None
         cot = db.session.execute(db.session.query(CoT).filter_by(type="a-h-G")).first()
@@ -105,12 +105,12 @@ def test_alert_type_creates_no_marker_row(auth, app):
     from opentakserver.models.CoT import CoT
     from opentakserver.models.Marker import Marker
 
-    tresc = zadanie(type="b-a-o-tbl")
-    assert auth.post("/api/cot", json=tresc).status_code == 201
+    body = request_body(type="b-a-o-tbl")
+    assert auth.post("/api/cot", json=body).status_code == 201
 
     with app.app_context():
         marker = db.session.execute(
-            db.session.query(Marker).filter_by(uid=tresc["uid"])
+            db.session.query(Marker).filter_by(uid=body["uid"])
         ).first()
         assert marker is None
         cot = db.session.execute(db.session.query(CoT).filter_by(type="b-a-o-tbl")).first()
@@ -121,8 +121,8 @@ def test_point_row_carries_the_coordinates(auth, app):
     from opentakserver.extensions import db
     from opentakserver.models.Point import Point
 
-    tresc = zadanie(latitude=50.5, longitude=19.5)
-    assert auth.post("/api/cot", json=tresc).status_code == 201
+    body = request_body(latitude=50.5, longitude=19.5)
+    assert auth.post("/api/cot", json=body).status_code == 201
 
     with app.app_context():
         rows = db.session.execute(db.session.query(Point)).all()
@@ -136,26 +136,26 @@ def test_resending_the_same_atom_uid_moves_the_marker(auth, app):
     from opentakserver.extensions import db
     from opentakserver.models.Marker import Marker
 
-    tresc = zadanie(latitude=10.0, longitude=20.0)
-    first = auth.post("/api/cot", json=tresc)
+    body = request_body(latitude=10.0, longitude=20.0)
+    first = auth.post("/api/cot", json=body)
     assert first.status_code == 201
 
     with app.app_context():
         marker = db.session.execute(
-            db.session.query(Marker).filter_by(uid=tresc["uid"])
+            db.session.query(Marker).filter_by(uid=body["uid"])
         ).first()[0]
         first_point_id = marker.point_id
         first_cot_id = marker.cot_id
 
-    tresc_ponowny = dict(tresc)
-    tresc_ponowny["latitude"] = 30.0
-    tresc_ponowny["longitude"] = 40.0
-    second = auth.post("/api/cot", json=tresc_ponowny)
+    second_body = dict(body)
+    second_body["latitude"] = 30.0
+    second_body["longitude"] = 40.0
+    second = auth.post("/api/cot", json=second_body)
     assert second.status_code == 201
 
     with app.app_context():
         markers = db.session.execute(
-            db.session.query(Marker).filter_by(uid=tresc["uid"])
+            db.session.query(Marker).filter_by(uid=body["uid"])
         ).all()
         assert len(markers) == 1
 
@@ -167,31 +167,31 @@ def test_resending_the_same_atom_uid_moves_the_marker(auth, app):
 
 
 def test_event_is_published_to_all_three_exchanges(auth, monkeypatch):
-    import opentakserver.blueprints.ots_api.cot_api as modul
+    import opentakserver.blueprints.ots_api.cot_api as cot_api_module
 
-    wyslane = []
+    published_to = []
 
-    class AtrapaKanalu:
+    class FakeChannel:
         def basic_publish(self, exchange, routing_key, body, properties=None):
-            wyslane.append(exchange)
+            published_to.append(exchange)
 
         def close(self):
             pass
 
-    class AtrapaPolaczenia:
+    class FakeConnection:
         def channel(self):
-            return AtrapaKanalu()
+            return FakeChannel()
 
         def close(self):
             pass
 
-    monkeypatch.setattr(modul.pika, "BlockingConnection", lambda *a, **k: AtrapaPolaczenia())
+    monkeypatch.setattr(cot_api_module.pika, "BlockingConnection", lambda *a, **k: FakeConnection())
 
-    import opentakserver.blueprints.ots_api.api as api_modul
+    import opentakserver.blueprints.ots_api.api as api_module
 
-    monkeypatch.setattr(api_modul.pika, "BlockingConnection", lambda *a, **k: AtrapaPolaczenia())
+    monkeypatch.setattr(api_module.pika, "BlockingConnection", lambda *a, **k: FakeConnection())
 
-    assert auth.post("/api/cot", json=zadanie()).status_code == 201
-    assert "cot_parser" in wyslane
-    assert "firehose" in wyslane
-    assert "groups" in wyslane
+    assert auth.post("/api/cot", json=request_body()).status_code == 201
+    assert "cot_parser" in published_to
+    assert "firehose" in published_to
+    assert "groups" in published_to
