@@ -60,3 +60,24 @@ def test_callsign_defaults_to_the_logged_in_user(auth):
     del tresc["callsign"]
     response = auth.post("/api/cot", json=tresc)
     assert response.status_code == 201
+
+
+def test_chat_event_with_a_dict_detail_succeeds(auth):
+    tresc = zadanie(type="b-t-f", detail={"message": "zbiorka"})
+    response = auth.post("/api/cot", json=tresc)
+    assert response.status_code == 201
+    assert response.json["uid"] == tresc["uid"]
+
+
+def test_chat_event_with_a_string_detail_is_rejected(auth):
+    response = auth.post("/api/cot", json=zadanie(type="b-t-f", detail="zbiorka"))
+    assert response.status_code == 400
+    assert response.json["success"] is False
+    assert "detail" in response.json["error"].lower()
+
+
+def test_chat_event_with_a_list_detail_is_rejected(auth):
+    response = auth.post("/api/cot", json=zadanie(type="b-t-f", detail=[1, 2, 3]))
+    assert response.status_code == 400
+    assert response.json["success"] is False
+    assert "detail" in response.json["error"].lower()

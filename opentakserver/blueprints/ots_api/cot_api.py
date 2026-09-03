@@ -29,11 +29,27 @@ def _read_float(body, key, default=None):
 @cot_send_api_blueprint.route("/api/cot", methods=["POST"])
 @auth_required()
 def send_cot():
+    """Send an arbitrary supported CoT event to the connected clients.
+
+    :param type: The CoT type to send, i.e. ``a-h-G``. Must be one of ``SUPPORTED_TYPES``
+    :param uid: The UID of the event, must be a UUID4 string
+    :param latitude: The latitude of the event, between -90 and 90
+    :param longitude: The longitude of the event, between -180 and 180
+    :param callsign: Optional callsign, defaults to the logged in user's username
+    :param remarks: Optional free-text remarks
+    :param detail: Optional dict of extra detail fields, i.e. ``{"message": "..."}`` for chat events
+    :param stale_seconds: Optional number of seconds until the event goes stale, defaults to
+        ``DEFAULT_STALE_SECONDS``
+    :param hae, ce, le: Optional height/circular/linear error values
+    """
     body = request.json or {}
 
     cot_type = body.get("type")
     if cot_type not in SUPPORTED_TYPES:
         return _error(f"Unsupported CoT type: {cot_type}")
+
+    if "detail" in body and body["detail"] is not None and not isinstance(body["detail"], dict):
+        return _error("detail must be an object")
 
     try:
         UUID(str(body.get("uid")), version=4)
