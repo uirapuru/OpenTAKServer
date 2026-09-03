@@ -81,3 +81,52 @@ def test_chat_event_with_a_list_detail_is_rejected(auth):
     assert response.status_code == 400
     assert response.json["success"] is False
     assert "detail" in response.json["error"].lower()
+
+
+def test_atom_type_creates_a_marker_row(auth, app):
+    from opentakserver.extensions import db
+    from opentakserver.models.CoT import CoT
+    from opentakserver.models.Marker import Marker
+
+    tresc = zadanie()
+    assert auth.post("/api/cot", json=tresc).status_code == 201
+
+    with app.app_context():
+        marker = db.session.execute(
+            db.session.query(Marker).filter_by(uid=tresc["uid"])
+        ).first()
+        assert marker is not None
+        cot = db.session.execute(db.session.query(CoT).filter_by(type="a-h-G")).first()
+        assert cot is not None
+
+
+def test_alert_type_creates_no_marker_row(auth, app):
+    from opentakserver.extensions import db
+    from opentakserver.models.CoT import CoT
+    from opentakserver.models.Marker import Marker
+
+    tresc = zadanie(type="b-a-o-tbl")
+    assert auth.post("/api/cot", json=tresc).status_code == 201
+
+    with app.app_context():
+        marker = db.session.execute(
+            db.session.query(Marker).filter_by(uid=tresc["uid"])
+        ).first()
+        assert marker is None
+        cot = db.session.execute(db.session.query(CoT).filter_by(type="b-a-o-tbl")).first()
+        assert cot is not None
+
+
+def test_point_row_carries_the_coordinates(auth, app):
+    from opentakserver.extensions import db
+    from opentakserver.models.Point import Point
+
+    tresc = zadanie(latitude=50.5, longitude=19.5)
+    assert auth.post("/api/cot", json=tresc).status_code == 201
+
+    with app.app_context():
+        rows = db.session.execute(db.session.query(Point)).all()
+        assert any(
+            abs(row[0].latitude - 50.5) < 1e-9 and abs(row[0].longitude - 19.5) < 1e-9
+            for row in rows
+        )

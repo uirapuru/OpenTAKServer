@@ -1,15 +1,26 @@
 """POST /api/cot - send an arbitrary supported CoT event to the connected clients."""
 
 import traceback
-from datetime import datetime, timezone
-from uuid import UUID
+from datetime import datetime, timedelta, timezone
+from uuid import UUID, uuid4
+from xml.etree import ElementTree as ET
 
 import bleach
 from flask import Blueprint, jsonify, request
 from flask_security import auth_required, current_user
+from sqlalchemy import insert
 
-from opentakserver.cot_builder import DEFAULT_STALE_SECONDS, SUPPORTED_TYPES, build_event
-from opentakserver.extensions import logger
+from opentakserver.cot_builder import (
+    DEFAULT_STALE_SECONDS,
+    SUPPORTED_TYPES,
+    build_event,
+    is_marker_type,
+)
+from opentakserver.extensions import db, logger
+from opentakserver.functions import cot_type_to_2525c, get_affiliation, get_battle_dimension
+from opentakserver.models.CoT import CoT
+from opentakserver.models.Marker import Marker
+from opentakserver.models.Point import Point
 
 cot_send_api_blueprint = Blueprint("cot_send_api", __name__)
 
@@ -70,6 +81,8 @@ def send_cot():
     callsign = bleach.clean(str(body.get("callsign") or current_user.username))
     remarks = bleach.clean(str(body["remarks"])) if body.get("remarks") else None
 
+    timestamp = datetime.now(timezone.utc)
+
     try:
         event = build_event(
             cot_type=cot_type,
@@ -77,7 +90,7 @@ def send_cot():
             callsign=callsign,
             latitude=latitude,
             longitude=longitude,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=timestamp,
             stale_seconds=int(body.get("stale_seconds", DEFAULT_STALE_SECONDS)),
             hae=_read_float(body, "hae", UNKNOWN_ERROR_VALUE),
             ce=_read_float(body, "ce", UNKNOWN_ERROR_VALUE),
@@ -89,5 +102,51 @@ def send_cot():
         logger.error(f"Failed to build CoT: {error}")
         logger.error(traceback.format_exc())
         return _error(f"Failed to build CoT: {error}")
+
+    stale = timestamp + timedelta(seconds=int(body.get("stale_seconds", DEFAULT_STALE_SECONDS)))
+
+    cot_row = db.session.execute(
+        insert(CoT).values(
+            how="m-g",
+            type=cot_type,
+            timestamp=timestamp,
+            xml=ET.tostring(event),
+            start=timestamp,
+            stale=stale,
+            sender_callsign=current_user.username,
+        )
+    )
+    db.session.commit()
+    cot_id = cot_row.inserted_primary_key[0]
+
+    point_row = db.session.execute(
+        insert(Point).values(
+            uid=str(uuid4()),
+            device_uid=None,
+            latitude=latitude,
+            longitude=longitude,
+            ce=_read_float(body, "ce", UNKNOWN_ERROR_VALUE),
+            hae=_read_float(body, "hae", UNKNOWN_ERROR_VALUE),
+            le=_read_float(body, "le", UNKNOWN_ERROR_VALUE),
+            timestamp=timestamp,
+            location_source="",
+            course=0,
+            speed=0,
+            cot_id=cot_id,
+        )
+    )
+    db.session.commit()
+
+    if is_marker_type(cot_type):
+        marker = Marker()
+        marker.uid = body["uid"]
+        marker.callsign = callsign
+        marker.affiliation = get_affiliation(cot_type)
+        marker.battle_dimension = get_battle_dimension(cot_type)
+        marker.mil_std_2525c = cot_type_to_2525c(cot_type)
+        marker.cot_id = cot_id
+        marker.point_id = point_row.inserted_primary_key[0]
+        db.session.add(marker)
+        db.session.commit()
 
     return jsonify({"success": True, "uid": event.get("uid")}), 201
