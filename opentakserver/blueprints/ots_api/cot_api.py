@@ -61,9 +61,10 @@ def send_cot():
     :param longitude: The longitude of the event, between -180 and 180
     :param callsign: Optional callsign, defaults to the logged in user's username
     :param remarks: Optional free-text remarks
-    :param detail: Optional dict of extra detail fields, i.e. ``{"message": "..."}`` for chat events
+    :param detail: Optional dict of extra detail fields. Chat events (``b-t-f``) require a
+        non-empty ``{"message": "..."}``
     :param stale_seconds: Optional number of seconds until the event goes stale, defaults to
-        ``DEFAULT_STALE_SECONDS``
+        ``DEFAULT_STALE_SECONDS``. Must be between 1 and ``MAX_STALE_SECONDS``
     :param hae, ce, le: Optional height/circular/linear error values
     """
     body = request.json or {}
