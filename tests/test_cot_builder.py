@@ -99,7 +99,6 @@ except Exception as e:
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
-        cwd="/home/uirapuru/OpenTAKServer-fork/.claude/worktrees/komunikaty-cot",
     )
     assert result.returncode == 0, f"Import failed: {result.stderr}"
     output = result.stdout.strip()
