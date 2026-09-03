@@ -8,7 +8,8 @@ from xml.etree import ElementTree as ET
 import bleach
 from flask import Blueprint, jsonify, request
 from flask_security import auth_required, current_user
-from sqlalchemy import insert
+from sqlalchemy import insert, update
+from sqlalchemy.exc import IntegrityError
 
 from opentakserver.cot_builder import (
     DEFAULT_STALE_SECONDS,
@@ -82,6 +83,10 @@ def send_cot():
     remarks = bleach.clean(str(body["remarks"])) if body.get("remarks") else None
 
     timestamp = datetime.now(timezone.utc)
+    stale_seconds = int(body.get("stale_seconds", DEFAULT_STALE_SECONDS))
+    ce = _read_float(body, "ce", UNKNOWN_ERROR_VALUE)
+    hae = _read_float(body, "hae", UNKNOWN_ERROR_VALUE)
+    le = _read_float(body, "le", UNKNOWN_ERROR_VALUE)
 
     try:
         event = build_event(
@@ -91,10 +96,10 @@ def send_cot():
             latitude=latitude,
             longitude=longitude,
             timestamp=timestamp,
-            stale_seconds=int(body.get("stale_seconds", DEFAULT_STALE_SECONDS)),
-            hae=_read_float(body, "hae", UNKNOWN_ERROR_VALUE),
-            ce=_read_float(body, "ce", UNKNOWN_ERROR_VALUE),
-            le=_read_float(body, "le", UNKNOWN_ERROR_VALUE),
+            stale_seconds=stale_seconds,
+            hae=hae,
+            ce=ce,
+            le=le,
             remarks=remarks,
             detail=body.get("detail"),
         )
@@ -103,7 +108,7 @@ def send_cot():
         logger.error(traceback.format_exc())
         return _error(f"Failed to build CoT: {error}")
 
-    stale = timestamp + timedelta(seconds=int(body.get("stale_seconds", DEFAULT_STALE_SECONDS)))
+    stale = timestamp + timedelta(seconds=stale_seconds)
 
     cot_row = db.session.execute(
         insert(CoT).values(
@@ -125,9 +130,9 @@ def send_cot():
             device_uid=None,
             latitude=latitude,
             longitude=longitude,
-            ce=_read_float(body, "ce", UNKNOWN_ERROR_VALUE),
-            hae=_read_float(body, "hae", UNKNOWN_ERROR_VALUE),
-            le=_read_float(body, "le", UNKNOWN_ERROR_VALUE),
+            ce=ce,
+            hae=hae,
+            le=le,
             timestamp=timestamp,
             location_source="",
             course=0,
@@ -146,7 +151,19 @@ def send_cot():
         marker.mil_std_2525c = cot_type_to_2525c(cot_type)
         marker.cot_id = cot_id
         marker.point_id = point_row.inserted_primary_key[0]
-        db.session.add(marker)
-        db.session.commit()
+        try:
+            db.session.add(marker)
+            db.session.commit()
+        except IntegrityError:
+            # A marker with this uid already exists - resending the same uid
+            # moves it to the new point/cot rather than being rejected, matching
+            # how /api/markers already treats a re-sent marker uid.
+            db.session.rollback()
+            db.session.execute(
+                update(Marker)
+                .where(Marker.uid == marker.uid)
+                .values(point_id=marker.point_id, cot_id=marker.cot_id, **marker.serialize())
+            )
+            db.session.commit()
 
     return jsonify({"success": True, "uid": event.get("uid")}), 201
