@@ -169,7 +169,7 @@ instance/*
 .env
 
 
-# Obszary robocze i srodowiska testowe Claude Code
+# Claude Code worktrees and test environments
 .claude/
 .venv-test/
 .superpowers/

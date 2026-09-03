@@ -1,3 +1,16 @@
+"""Shared fixtures for the test suite.
+
+The suite needs the test database from compose.test.yaml. Start it with:
+
+    docker compose -f compose.test.yaml up -d --wait
+
+then run the suite with:
+
+    .venv-test/bin/python -m pytest tests/ -q --no-cov
+
+Override the connection string with OTS_TEST_DATABASE_URI if you run your own.
+"""
+
 import base64
 import os
 import tempfile
@@ -6,8 +19,8 @@ from unittest.mock import MagicMock
 import pika
 import pytest
 
-# Zaslepka musi stanac PRZED importem aplikacji: create_app(cli=False)
-# otwiera polaczenie z RabbitMQ podczas startu.
+# This stub has to stand BEFORE the application is imported: create_app(cli=False)
+# opens a connection to RabbitMQ during startup.
 pika.BlockingConnection = MagicMock()
 
 from flask_security import hash_password  # noqa: E402
@@ -96,14 +109,21 @@ class AuthActions:
         raw = f"{self.username}:{self.password}".encode("utf-8")
         return {"Authorization": "Basic " + base64.b64encode(raw).decode("utf-8")}
 
+    # headers is compared against None rather than tested for truth, so an
+    # explicit headers={} really sends no headers instead of quietly falling
+    # back to the authenticated ones. A test proving an endpoint rejects
+    # unauthenticated requests would otherwise pass while sending a valid token.
+    def _headers(self, headers):
+        return headers if headers is not None else self.headers
+
     def get(self, path, headers=None, **kwargs):
-        return self.client.get(path, headers=headers or self.headers, **kwargs)
+        return self.client.get(path, headers=self._headers(headers), **kwargs)
 
     def post(self, path, headers=None, **kwargs):
-        return self.client.post(path, headers=headers or self.headers, **kwargs)
+        return self.client.post(path, headers=self._headers(headers), **kwargs)
 
     def delete(self, path, headers=None, **kwargs):
-        return self.client.delete(path, headers=headers or self.headers, **kwargs)
+        return self.client.delete(path, headers=self._headers(headers), **kwargs)
 
 
 @pytest.fixture

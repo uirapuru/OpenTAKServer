@@ -15,6 +15,9 @@ from flask_security import auth_required, current_user
 from sqlalchemy import insert, update
 from sqlalchemy.exc import IntegrityError
 
+# Package level circular import: ots_api/__init__.py imports api before cot_api,
+# so api is already in sys.modules by the time this line runs. Reordering that
+# import list breaks startup.
 from opentakserver.blueprints.ots_api.api import route_cot
 from opentakserver.cot_builder import (
     DEFAULT_STALE_SECONDS,
@@ -170,6 +173,12 @@ def _persist_event(
     event, cot_type, callsign, timestamp, stale, latitude, longitude, ce, hae, le, uid
 ):
     """Write the CoT/Point rows, and a Marker row for atom types, for a built event.
+
+    These rows are ALSO written independently by cot_parser when it consumes the
+    message this request publishes onto the ``cot_parser`` exchange. One send
+    therefore produces two CoT rows and two Point rows, and the parser's own
+    upsert may overwrite the Marker row written here. That doubling is what
+    POST /api/markers already does; it is documented here, not changed.
 
     A repeated ``uid`` for an atom type moves the existing Marker to the new
     point/cot rather than being rejected, matching how /api/markers already
