@@ -51,7 +51,7 @@ class MissionInvitation(db.Model):
             "client_uid": self.client_uid,
             "callsign": self.callsign,
             "username": self.username,
-            "group_name": self.group,
+            "group_name": self.group_name,
             "team_name": self.team_name,
             "creator_uid": self.creator_uid,
             "role": self.role,
@@ -61,14 +61,44 @@ class MissionInvitation(db.Model):
     def to_json(self):
         return self.serialize()
 
+    def invitee(self) -> str | None:
+        """Name the invited party the way its invitation type says.
+
+        TAK Server identifies the invitee by a different value for each type:
+        a device by its UID, a person by username, a team or a group by name.
+        The type column decides which of these columns carries it.
+        """
+        by_type = {
+            InvitationTypeEnum.clientUid: self.client_uid,
+            InvitationTypeEnum.callsign: self.callsign,
+            InvitationTypeEnum.userName: self.username,
+            InvitationTypeEnum.group: self.group_name,
+            InvitationTypeEnum.team: self.team_name,
+        }
+
+        return by_type.get(self.type) or (
+            self.client_uid or self.callsign or self.username
+            or self.team_name or self.group_name
+        )
+
     def to_marti_json(self):
-        return {
+        json = {
             "missionName": self.mission_name,
-            "invitee": self.eud_uid,
-            "role": [MissionRole.MISSION_SUBSCRIBER],
+            # A role is a single object, not a list of role names. Clients
+            # read its permissions to decide what the invited party may do;
+            # a list makes the invitation unreadable to them.
+            "role": MissionRole.SUBSCRIBER_ROLE,
             "type": self.type,
             "creatorUid": self.creator_uid,
             "createTime": iso8601_string_from_datetime(),
             "token": "",
             "missionGuid": self.mission.guid or self.mission_guid,
         }
+
+        # Left out entirely when unknown: clients type this field as a string,
+        # so a null is worse for them than an absent key.
+        invitee = self.invitee()
+        if invitee:
+            json["invitee"] = invitee
+
+        return json
