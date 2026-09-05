@@ -96,6 +96,59 @@ class Token(db.Model):
             return encoded_token
 
     @staticmethod
+    def belongs_to(token: str, username: str) -> bool:
+        """Says whether this enrollment token was issued for that account.
+
+        Two differences from verify_token, both deliberate:
+
+        * the token is bound to the account. verify_token only asks whether a
+          token is genuine, which is enough to hand out a certificate but not
+          enough to let somebody log in AS somebody: one operator's token
+          would otherwise open every other operator's account.
+        * no use is counted. A chat client logs in again after every network
+          hiccup, and counting a use per login would exhaust a token's max_uses
+          within minutes of ordinary use.
+        """
+        if not token or not username:
+            return False
+
+        with open(
+            os.path.join(
+                app.config.get("OTS_CA_FOLDER"), "certs", "opentakserver", "opentakserver.pub"
+            ),
+            "r",
+        ) as key:
+            try:
+                decoded_token: dict = jwt.decode(
+                    token, key.read(), algorithms=["RS256"], audience="OpenTAKServer"
+                )
+            except BaseException as e:
+                logger.error(f"Failed to decode token: {e}")
+                logger.debug(traceback.format_exc())
+                return False
+
+        if decoded_token.get("sub") != username:
+            logger.error("Token was issued for another account")
+            return False
+
+        sha256 = hashlib.sha256()
+        sha256.update(json.dumps(decoded_token).encode())
+        token_from_db = (
+            db.session.query(Token).filter_by(token_hash=sha256.hexdigest()).first()
+        )
+        if not token_from_db:
+            logger.error("Token not in db")
+            return False
+        if token_from_db.disabled:
+            logger.error("Token disabled")
+            return False
+        if "max" in decoded_token and token_from_db.total_uses >= decoded_token["max"]:
+            logger.error("Too many uses for token")
+            return False
+
+        return True
+
+    @staticmethod
     def verify_token(token: str) -> bool:
         with open(
             os.path.join(

@@ -23,6 +23,7 @@ from werkzeug.datastructures import ImmutableMultiDict
 from opentakserver.config_helpers import public_video_port
 from opentakserver.extensions import db, ldap_manager, logger
 from opentakserver.forms.MediaMTXPathConfig import MediaMTXPathConfig
+from opentakserver.models.Token import Token
 from opentakserver.models.VideoRecording import VideoRecording
 from opentakserver.models.VideoStream import VideoStream
 
@@ -475,7 +476,15 @@ def external_auth():
         user = app.security.datastore.find_user(username=username)
         if not user:
             return "", 401
-        if not verify_password(password, user.password):
+        # The password OR the account's enrollment token. A client that joined
+        # by scanning a QR code never learns the password: ATAK keeps the token
+        # from the enrollment URL as the account's credential and offers that
+        # to every service. Without this branch such a client can publish video
+        # and talk to the TAK server but is turned away from chat, which reads
+        # the very same credential store.
+        if not verify_password(password, user.password) and not Token.belongs_to(
+            password, username
+        ):
             return "", 401
         auth_success = True
 
