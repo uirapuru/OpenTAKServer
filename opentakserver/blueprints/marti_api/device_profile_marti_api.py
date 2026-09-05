@@ -145,44 +145,6 @@ def create_profile_zip(enrollment=True, syncSecago=-1, clientUid: str | None = N
     enable_channels.text = "true" if app.config.get("OTS_ENABLE_CHANNELS") else "false"
 
     if enrollment:
-        # Tell the client which stream to talk to, and on which port.
-        #
-        # Without this the only way to learn the port is a QR code, which
-        # carries it inside the host field. A client that enrolled by typing
-        # a server address, a username and a password - ATAK's "quick connect" -
-        # has no port to go on and falls back to its built-in 8089. On a
-        # deployment whose CoT stream does not sit on 8089 the client ends up
-        # with a server entry that refuses to connect, and nothing on screen
-        # says why. Measured 2026-09-05 against a Kubernetes deployment whose
-        # stream is on a per-environment node port.
-        #
-        # This block goes into the ENROLLMENT profile only. The connection
-        # profile is fetched on every startup, and rewriting stream 0 there
-        # would silently undo a second server the operator added by hand.
-        #
-        # 'cot_streams' is its own preference block. ATAK reads streams from
-        # that name and ignores stream keys placed among the app preferences.
-        streams = SubElement(prefs, "preference", {"version": "1", "name": "cot_streams"})
-        stream_host = urlparse(request.url_root).hostname
-        stream_count = SubElement(
-            streams, "entry", {"key": "count", "class": "class java.lang.Integer"}
-        )
-        stream_count.text = "1"
-        stream_description = SubElement(
-            streams, "entry", {"key": "description0", "class": "class java.lang.String"}
-        )
-        stream_description.text = f"OpenTAKServer_{stream_host}"
-        stream_enabled = SubElement(
-            streams, "entry", {"key": "enabled0", "class": "class java.lang.Boolean"}
-        )
-        stream_enabled.text = "true"
-        stream_connect = SubElement(
-            streams, "entry", {"key": "connectString0", "class": "class java.lang.String"}
-        )
-        stream_connect.text = (
-            f"{stream_host}:{app.config.get('OTS_SSL_STREAMING_PORT')}:ssl"
-        )
-
         # Add the maps to the zip
         if app.config.get("OTS_PROFILE_MAP_SOURCES") and enrollment:
             maps_path = os.path.join(os.path.dirname(opentakserver.__file__), "maps")
