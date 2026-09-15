@@ -45,6 +45,7 @@ from opentakserver.models.CoT import CoT
 from opentakserver.models.DataPackage import DataPackage
 from opentakserver.models.DeviceProfiles import DeviceProfiles
 from opentakserver.models.EUD import EUD
+from opentakserver.eud_handler.callsign import callsign_owner
 from opentakserver.models.EUDStats import EUDStats
 from opentakserver.models.Group import Group
 from opentakserver.models.GroupMission import GroupMission
@@ -676,6 +677,30 @@ class EudHandler(socketserver.BaseRequestHandler):
                                 .filter(Team.name == chatroom.id)
                                 .values(chatroom_id=chatroom.id)
                             )
+
+                # A callsign has to be unique server-wide. euds.callsign carries a
+                # UNIQUE constraint, and line 523 also names this EUD's RabbitMQ
+                # queue after it, so two devices sharing a callsign share the queue
+                # their direct messages arrive on.
+                #
+                # Without this check the second device gets dropped in silence: the
+                # INSERT below raises IntegrityError, the handler rolls back and
+                # retries as an UPDATE keyed on the new uid, and that matches no row
+                # because the INSERT just failed. No EUD row, no error, and every
+                # later write fails on one of the fourteen foreign keys pointing at
+                # euds.uid. On a server anyone may join, two strangers picking the
+                # same callsign is a matter of time, not bad luck.
+                #
+                # Refuse the connection instead, and say why.
+                taken_by = callsign_owner(db.session, self.callsign, uid)
+                if taken_by:
+                    self.logger.warning(
+                        "Callsign {} already belongs to EUD {}, refusing {}".format(
+                            self.callsign, taken_by.uid, uid
+                        )
+                    )
+                    self.close_connection()
+                    return
 
                 try:
                     eud = db.session.execute(select(EUD).filter_by(uid=uid)).first()[0]
