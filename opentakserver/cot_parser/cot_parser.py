@@ -63,6 +63,13 @@ from opentakserver.models.WebAuthn import WebAuthn
 from opentakserver.models.ZMIST import ZMIST
 from opentakserver.proto import atak_pb2
 
+# Stamp with the sender's account name, added to every direct message.
+# Clients cannot forge it because every copy they send is removed first.
+ORIGIN_TAG = "_taklab_origin"
+
+# Map snapshots from taklab clients. They are routed but never stored.
+MAP_SNAPSHOT_TYPE = "y-taklab-map"
+
 
 class CoTController:
 
@@ -99,6 +106,10 @@ class CoTController:
         self.rabbit_channel.start_consuming()
 
     def insert_cot(self, soup, event, uid):
+        if event.attrs.get("type") == MAP_SNAPSHOT_TYPE:
+            # A map snapshot shows what the user has on screen, don't keep it
+            return None
+
         start = datetime_from_iso8601_string(event.attrs["start"])
         stale = datetime_from_iso8601_string(event.attrs["stale"])
         timestamp = datetime_from_iso8601_string(event.attrs["time"])
@@ -1139,17 +1150,47 @@ class CoTController:
                     ),
                 )
 
+    def get_username(self, user_id):
+        if not user_id:
+            return ""
+
+        # Imported here because the User model needs fsqla.FsModels.set_db_info() first
+        from opentakserver.models.user import User
+
+        with self.context:
+            user = self.db.session.get(User, user_id)
+            return user.username if user else ""
+
+    def stamp_origin(self, event, user_id):
+        # The username comes from the authenticated connection, never from the CoT itself
+        detail = event.find("detail")
+        if not detail:
+            detail = BeautifulSoup("<detail/>", "xml").find("detail")
+            event.append(detail)
+
+        origin = BeautifulSoup(f"<{ORIGIN_TAG}/>", "xml").find(ORIGIN_TAG)
+        origin["user"] = self.get_username(user_id)
+        detail.append(origin)
+
     def route_cot(self, event, uid: str, user_id: int):
         if not uid or uid == self.context.app.config.get("OTS_NODE_ID"):
             # This is a server generated CoT (i.e. ADS-B scheduled job) which was already properly routed
             return
 
+        # Only the server may say who sent a CoT
+        for origin in event.find_all(ORIGIN_TAG):
+            origin.decompose()
+
         destinations = event.find_all("dest")
         if destinations:
+            stamped = False
 
             for destination in destinations:
                 # ATAK and WinTAK use callsign, iTAK uses uid
                 if "callsign" in destination.attrs and destination.attrs["callsign"]:
+                    if not stamped:
+                        self.stamp_origin(event, user_id)
+                        stamped = True
                     self.rabbit_channel.basic_publish(
                         exchange="dms",
                         routing_key=destination.attrs["callsign"],
@@ -1161,6 +1202,9 @@ class CoTController:
 
                 # iTAK uses its own UID in the <dest> tag when sending CoTs to a mission so we don't send those to the dms exchange
                 elif "uid" in destination.attrs and destination["uid"] != uid:
+                    if not stamped:
+                        self.stamp_origin(event, user_id)
+                        stamped = True
                     self.rabbit_channel.basic_publish(
                         exchange="dms",
                         routing_key=destination.attrs["uid"],
