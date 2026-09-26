@@ -241,3 +241,22 @@ def test_forged_origin_is_stripped_before_storing(app, controller, user_id, send
     with app.app_context():
         [stored] = db.session.execute(db.select(CoT)).scalars()
         assert origins(stored.xml) == []
+
+
+def test_map_snapshot_point_is_not_stored(app, controller, user_id, sender_eud):
+    from opentakserver.extensions import db
+    from opentakserver.models.Point import Point
+
+    xml = make_event(
+        '<taklab_map v="1">{"v":1}</taklab_map><marti><dest uid="bot-uid"/></marti>',
+        event_type="y-taklab-map",
+        event_uid=f"{SENDER_UID}.taklab-map.2",
+    ).replace('lat="9999999.0" lon="9999999.0"', 'lat="51.11" lon="17.03"')
+
+    deliver(controller, xml, user_id)
+
+    with app.app_context():
+        assert db.session.execute(db.select(Point)).scalars().all() == []
+    [(routing_key, body)] = published(controller, "dms")
+    assert routing_key == "bot-uid"
+    assert origins(body["cot"])[0].attrs == {"user": "kaszub"}

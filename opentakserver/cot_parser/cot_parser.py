@@ -106,10 +106,6 @@ class CoTController:
         self.rabbit_channel.start_consuming()
 
     def insert_cot(self, soup, event, uid):
-        if event.attrs.get("type") == MAP_SNAPSHOT_TYPE:
-            # A map snapshot shows what the user has on screen, don't keep it
-            return None
-
         start = datetime_from_iso8601_string(event.attrs["start"])
         stale = datetime_from_iso8601_string(event.attrs["stale"])
         timestamp = datetime_from_iso8601_string(event.attrs["time"])
@@ -1288,6 +1284,13 @@ class CoTController:
             if event:
                 # Before storing the CoT or passing it to Data Sync missions
                 self.strip_origin(event)
+
+                if event.attrs.get("type") == MAP_SNAPSHOT_TYPE:
+                    # A map snapshot shows what the user has on screen, route it but store nothing
+                    self.route_cot(event, uid, body.get("user_id"))
+                    self.rabbit_channel.basic_ack(delivery_tag=basic_deliver.delivery_tag)
+                    return
+
                 cot_pk = self.insert_cot(soup, event, uid)
                 point_pk = self.parse_point(event, uid, cot_pk)
                 self.parse_geochat(event, cot_pk, point_pk)
