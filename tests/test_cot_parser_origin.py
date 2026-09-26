@@ -260,3 +260,65 @@ def test_map_snapshot_point_is_not_stored(app, controller, user_id, sender_eud):
     [(routing_key, body)] = published(controller, "dms")
     assert routing_key == "bot-uid"
     assert origins(body["cot"])[0].attrs == {"user": "kaszub"}
+
+
+def test_stamp_goes_into_the_event_detail_not_a_nested_one(controller, user_id):
+    xml = make_event('<marti><dest uid="bot-uid"/></marti>').replace(
+        "<detail>", "<x><detail/></x><detail>", 1
+    )
+    event = parse(xml)
+
+    controller.route_cot(event, SENDER_UID, user_id)
+
+    [(_, body)] = published(controller, "dms")
+    [origin] = origins(body["cot"])
+    assert origin.attrs == {"user": "kaszub"}
+    assert origin.parent.parent.name == "event"
+
+
+def test_event_without_detail_gets_one_with_the_stamp(controller, user_id):
+    xml = (
+        '<event version="2.0" uid="event-1" type="b-t-f" how="h-g-i-g-o" '
+        'time="2026-09-26T16:40:00Z" start="2026-09-26T16:40:00Z" '
+        'stale="2026-09-26T16:45:00Z"><marti><dest uid="bot-uid"/></marti></event>'
+    )
+    event = parse(xml)
+
+    controller.route_cot(event, SENDER_UID, user_id)
+
+    [(_, body)] = published(controller, "dms")
+    [origin] = origins(body["cot"])
+    assert origin.attrs == {"user": "kaszub"}
+    assert origin.parent.name == "detail"
+    assert origin.parent.parent.name == "event"
+
+
+def test_database_failure_stamps_empty_and_still_delivers(controller, user_id):
+    controller.db = MagicMock()
+    controller.db.session.get.side_effect = RuntimeError("database is down")
+    event = parse(make_event('<marti><dest uid="bot-uid"/></marti>'))
+
+    controller.route_cot(event, SENDER_UID, user_id)
+
+    [(_, body)] = published(controller, "dms")
+    [origin] = origins(body["cot"])
+    assert origin.attrs == {"user": ""}
+    assert "b-t-f" not in str(controller.logger.method_calls)
+
+
+def test_map_snapshot_without_dest_is_broadcast_stripped_and_not_stored(
+    app, controller, user_id, sender_eud
+):
+    xml = make_event(
+        '<taklab_map v="1">{"v":1}</taklab_map><_taklab_origin user="victim"/>',
+        event_type="y-taklab-map",
+        event_uid=f"{SENDER_UID}.taklab-map.3",
+    )
+
+    deliver(controller, xml, user_id)
+
+    assert stored_types(app) == []
+    assert published(controller, "dms") == []
+    [(routing_key, body)] = published(controller, "groups")
+    assert routing_key == "__ANON__.OUT"
+    assert origins(body["cot"]) == []

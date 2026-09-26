@@ -1153,9 +1153,14 @@ class CoTController:
         # Imported here because the User model needs fsqla.FsModels.set_db_info() first
         from opentakserver.models.user import User
 
-        with self.context:
-            user = self.db.session.get(User, user_id)
-            return user.username if user else ""
+        # A failed lookup must not stop the direct message from being delivered
+        try:
+            with self.context:
+                user = self.db.session.get(User, user_id)
+                return user.username if user else ""
+        except BaseException as e:
+            self.logger.error(f"Failed to look up the username of user {user_id}: {e}")
+            return ""
 
     def strip_origin(self, event):
         # Only the server may say who sent a CoT
@@ -1164,8 +1169,8 @@ class CoTController:
 
     def stamp_origin(self, event, user_id):
         # The username comes from the authenticated connection, never from the CoT itself
-        detail = event.find("detail")
-        if not detail:
+        detail = event.find("detail", recursive=False)
+        if detail is None:
             detail = BeautifulSoup("<detail/>", "xml").find("detail")
             event.append(detail)
 
