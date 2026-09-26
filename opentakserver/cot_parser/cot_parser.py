@@ -1161,6 +1161,11 @@ class CoTController:
             user = self.db.session.get(User, user_id)
             return user.username if user else ""
 
+    def strip_origin(self, event):
+        # Only the server may say who sent a CoT
+        for origin in event.find_all(ORIGIN_TAG):
+            origin.decompose()
+
     def stamp_origin(self, event, user_id):
         # The username comes from the authenticated connection, never from the CoT itself
         detail = event.find("detail")
@@ -1177,9 +1182,7 @@ class CoTController:
             # This is a server generated CoT (i.e. ADS-B scheduled job) which was already properly routed
             return
 
-        # Only the server may say who sent a CoT
-        for origin in event.find_all(ORIGIN_TAG):
-            origin.decompose()
+        self.strip_origin(event)
 
         destinations = event.find_all("dest")
         if destinations:
@@ -1283,6 +1286,8 @@ class CoTController:
                 uid = None
 
             if event:
+                # Before storing the CoT or passing it to Data Sync missions
+                self.strip_origin(event)
                 cot_pk = self.insert_cot(soup, event, uid)
                 point_pk = self.parse_point(event, uid, cot_pk)
                 self.parse_geochat(event, cot_pk, point_pk)

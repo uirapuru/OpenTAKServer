@@ -228,3 +228,16 @@ def test_ordinary_dm_is_still_stored(app, controller, user_id, sender_eud):
 
     assert stored_types(app) == ["b-t-f"]
     assert len(published(controller, "dms")) == 1
+
+
+def test_forged_origin_is_stripped_before_storing(app, controller, user_id, sender_eud):
+    from opentakserver.extensions import db
+    from opentakserver.models.CoT import CoT
+
+    xml = make_event('<_taklab_origin user="victim"/><marti><dest uid="bot-uid"/></marti>')
+
+    deliver(controller, xml, user_id)
+
+    with app.app_context():
+        [stored] = db.session.execute(db.select(CoT)).scalars()
+        assert origins(stored.xml) == []
