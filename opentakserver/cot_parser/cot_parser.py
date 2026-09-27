@@ -28,6 +28,7 @@ from opentakserver.models.GroupUser import GroupUser
 from pika.channel import Channel
 from sqlalchemy import exc, insert, select, update
 
+from opentakserver.cot_parser.tdd import is_self_delete
 from opentakserver.defaultconfig import DefaultConfig
 from opentakserver.extensions import db, logger
 from opentakserver.functions import *
@@ -1309,8 +1310,10 @@ class CoTController:
                 self.route_cot(event, uid, body.get("user_id"))
                 self.rabbit_channel.basic_ack(delivery_tag=basic_deliver.delivery_tag)
 
-                # EUD went offline
-                if event.attrs["type"] == "t-x-d-d":
+                # EUD went offline. t-x-d-d is also sent when a user deletes a map
+                # object (marker, route, ...); only a self logout should disconnect
+                # the sender's own EUD.
+                if event.attrs["type"] == "t-x-d-d" and is_self_delete(event, uid):
 
                     try:
                         with self.context:
