@@ -1719,6 +1719,12 @@ def upload_content():
             request.data, secure_filename(file_name) + ".zip", username, creator_uid
         )
 
+        if file_hash is None:
+            return (
+                jsonify({"success": False, "error": gettext("Failed to save the data package")}),
+                500,
+            )
+
         response = {
             "UID": str(uuid.uuid4()),
             "SubmissionDateTime": iso8601_string_from_datetime(),
