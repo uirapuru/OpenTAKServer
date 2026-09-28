@@ -26,7 +26,9 @@ from opentakserver.models.MissionContent import MissionContent
 data_package_marti_api = Blueprint("data_package_marti_api", __name__)
 
 
-def save_data_package_file(file, filename: str = None, username: str = None, eud_uid: str = None):
+def save_data_package_file(
+    file, filename: str = None, username: str = None, eud_uid: str = None
+) -> str | None:
     file_hash = request.args.get("hash")
     if not file_hash:
         sha256 = hashlib.sha256()
@@ -49,9 +51,10 @@ def save_data_package_file(file, filename: str = None, username: str = None, eud
         logger.debug("Got file: {} - {}".format(file.filename, file_hash))
 
     file_size = os.path.getsize(os.path.join(app.config.get("UPLOAD_FOLDER"), f"{file_hash}.zip"))
-    save_data_package_to_db(
+    if not save_data_package_to_db(
         f"{filename}.zip", file_hash, "application/x-zip-compressed", file_size, username, eud_uid
-    )
+    ):
+        return None
 
     return file_hash
 
@@ -63,8 +66,14 @@ def save_data_package_to_db(
     file_size: int = 0,
     username: str = None,
     eud_uid: str = None,
-):
+) -> bool:
+    """Returns True when a row with this hash is in the database (new or already there)."""
     try:
+        existing = db.session.execute(db.select(DataPackage).filter_by(hash=sha256_hash)).first()
+        if existing:
+            logger.info("Data package %s already stored, keeping the existing row", sha256_hash)
+            return True
+
         data_package = DataPackage()
         data_package.filename = filename
         data_package.hash = sha256_hash
@@ -83,19 +92,15 @@ def save_data_package_to_db(
 
         db.session.add(data_package)
         db.session.commit()
+        return True
     except sqlalchemy.exc.IntegrityError as e:
         db.session.rollback()
         logger.error("Failed to save data package: {}".format(e))
         logger.debug(traceback.format_exc())
-        return (
-            jsonify(
-                {"success": False, "error": gettext("This data package has already been uploaded")}
-            ),
-            400,
-        )
+        return False
 
 
-def create_data_package_zip(file: FileStorage | str) -> str:
+def create_data_package_zip(file: FileStorage | str) -> str | None:
     if isinstance(file, str):
         logger.info(secure_filename(os.path.basename(file)))
         filename, extension = os.path.splitext(secure_filename(os.path.basename(file)))
@@ -168,9 +173,10 @@ def create_data_package_zip(file: FileStorage | str) -> str:
         os.path.join(app.config.get("UPLOAD_FOLDER"), f"{filename}.zip"),
         os.path.join(app.config.get("UPLOAD_FOLDER"), f"{data_package_hash}.zip"),
     )
-    save_data_package_to_db(
+    if not save_data_package_to_db(
         f"{filename}.zip", data_package_hash, "application/zip", len(zip_file_bytes)
-    )
+    ):
+        return None
 
     return data_package_hash
 
@@ -209,6 +215,12 @@ def data_package_share():
             file_hash = create_data_package_zip(file)
         else:
             file_hash = save_data_package_file(file)
+
+        if file_hash is None:
+            return (
+                jsonify({"success": False, "error": gettext("Failed to save the data package")}),
+                500,
+            )
 
         url = urlparse(request.url_root)
         return (

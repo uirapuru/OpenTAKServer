@@ -15,7 +15,7 @@ class DataPackage(db.Model):
     __tablename__ = "data_packages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    filename: Mapped[str] = mapped_column(String(255), unique=True)
+    filename: Mapped[str] = mapped_column(String(255))
     hash: Mapped[str] = mapped_column(String(255), unique=True)
     creator_uid: Mapped[str] = mapped_column(
         String(255), ForeignKey("euds.uid", ondelete="CASCADE"), nullable=True
