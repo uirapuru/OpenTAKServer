@@ -5,7 +5,6 @@ import importlib
 import pytest
 
 
-
 @pytest.fixture
 def mission(app):
     from opentakserver.extensions import db
@@ -73,3 +72,11 @@ def test_put_unknown_mission_is_404(client, mission, monkeypatch):
     response = client.put("/Marti/api/missions/nope/keywords", json=["a"])
 
     assert response.status_code == 404
+
+
+def test_put_non_list_body_is_400_and_keeps_keywords(app, client, mission):
+    response = client.put(f"/Marti/api/missions/{mission}/keywords", json={"a": 1})
+
+    assert response.status_code == 400
+    assert response.json["success"] is False
+    assert stored_keywords(app, mission) == ["x"]

@@ -1329,7 +1329,10 @@ def put_mission_keywords(mission_name):
     # Jak w TAK Server: lista z żądania ZASTĘPUJE dotychczasowe słowa kluczowe.
     new_keywords = request.json
     if not isinstance(new_keywords, list):
-        new_keywords = []
+        return (
+            jsonify({"success": False, "error": gettext("Keywords must be a JSON list")}),
+            400,
+        )
     mission.keywords = list(dict.fromkeys(str(keyword) for keyword in new_keywords))
     db.session.commit()
 
