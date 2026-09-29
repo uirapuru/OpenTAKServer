@@ -1326,18 +1326,21 @@ def put_mission_keywords(mission_name):
         )
     mission = mission[0]
 
+    # Jak w TAK Server: lista z żądania ZASTĘPUJE dotychczasowe słowa kluczowe.
     new_keywords = request.json
-    current_keywords = mission.keywords or []
-    for keyword in new_keywords:
-        if keyword not in current_keywords:
-            current_keywords.append(keyword)
-
-    db.session.execute(
-        update(Mission).where(Mission.name == mission_name).values(keywords=current_keywords)
-    )
+    if not isinstance(new_keywords, list):
+        new_keywords = []
+    mission.keywords = list(dict.fromkeys(str(keyword) for keyword in new_keywords))
     db.session.commit()
 
-    return "", 200
+    return jsonify(
+        {
+            "version": "3",
+            "type": "Mission",
+            "data": [mission.to_json()],
+            "nodeId": app.config.get("OTS_NODE_ID"),
+        }
+    )
 
 
 @mission_marti_api.route("/Marti/api/missions/<mission_name>/subscription", methods=["PUT"])
