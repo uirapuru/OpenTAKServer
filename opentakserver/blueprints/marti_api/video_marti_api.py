@@ -23,6 +23,9 @@ from opentakserver.models.VideoStream import VideoStream
 
 video_marti_api = Blueprint("video_marti_api", __name__)
 
+# Addresses MediaMTX reports for its own streams; they mean "this server".
+LOOPBACK_ADDRESSES = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+
 
 @video_marti_api.route("/Marti/vcm", methods=["GET", "POST"])
 def video():
@@ -110,6 +113,13 @@ def video():
                     feed = BeautifulSoup(video.xml, "xml")
 
                     url = urlparse(request.url_root).hostname
+                    # A stream reported by a CoT event (ATAK video alias, a camera
+                    # received through federation) lives wherever the sender said,
+                    # not on this server. Keep that address unless it is useless.
+                    if video.cot_id is not None and feed.find("address"):
+                        reported = (feed.find("address").text or "").strip()
+                        if reported and reported not in LOOPBACK_ADDRESSES:
+                            url = reported
                     path = feed.find("path").text
                     if not path.startswith("/"):
                         path = "/" + path
