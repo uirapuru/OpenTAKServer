@@ -2182,8 +2182,9 @@ def delete_content(mission_name: str | None = None, mission_guid: str | None = N
                 500,
             )
 
+    # The first argument is the mission name; passing the EUD uid put it in <mission name>.
     event = generate_mission_change_cot(
-        eud_uid,
+        mission.name,
         mission,
         mission_change,
         content=content,
