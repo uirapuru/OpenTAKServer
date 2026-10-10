@@ -13,6 +13,7 @@ from flask_security import auth_required, roles_required
 from opentakserver.blueprints.ots_api.api import paginate, search
 from opentakserver.extensions import db, ldap_manager, logger
 from opentakserver.models.Group import Group
+from opentakserver.models.GroupMission import GroupMission
 from opentakserver.models.GroupUser import GroupUser
 
 group_api = Blueprint("group_api", __name__)
@@ -450,6 +451,9 @@ def delete_group():
         group = group[0]
 
         GroupUser.query.filter_by(group_id=group.id).delete()
+        # Group.missions is viewonly; unlink missions first or the delete fails on the
+        # groups_missions foreign key. The missions themselves stay.
+        GroupMission.query.filter_by(group_id=group.id).delete()
         db.session.delete(group)
         db.session.commit()
     except BaseException as e:
