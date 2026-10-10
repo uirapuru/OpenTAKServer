@@ -712,6 +712,9 @@ def delete_mission(mission_name: str):
                 403,
             )
 
+        # Mission.groups is viewonly, so the ORM leaves rows in groups_missions and
+        # the delete fails on the foreign key for every mission that has a group.
+        db.session.query(GroupMission).filter_by(mission_name=mission.name).delete()
         db.session.delete(mission)
         db.session.commit()
 
@@ -2098,7 +2101,8 @@ def delete_content(mission_name: str | None = None, mission_guid: str | None = N
     mission_change.change_type = MissionChange.REMOVE_CONTENT
     mission_change.mission_name = mission_name
     mission_change.timestamp = datetime.datetime.now(datetime.timezone.utc)
-    mission_change.creator_uid = request.args.get("creatorUid")
+    # creator_uid is NOT NULL; fall back to the token subject when the client omits creatorUid.
+    mission_change.creator_uid = request.args.get("creatorUid") or eud_uid
     mission_change.server_time = datetime.datetime.now(datetime.timezone.utc)
 
     mission_uid = None
