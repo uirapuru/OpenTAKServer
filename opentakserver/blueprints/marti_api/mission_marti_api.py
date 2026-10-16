@@ -1,10 +1,12 @@
 import datetime
 import hashlib
+import io
 import json
 import os
 import time
 import traceback
 import uuid
+import zipfile
 from urllib.parse import urlparse
 from xml.etree.ElementTree import Element, SubElement, fromstring, tostring
 
@@ -55,7 +57,10 @@ mission_marti_api = Blueprint("mission_marti_api", __name__)
 
 
 def verify_token() -> dict | bool:
+    # ATAK wysyła token misji w Authorization, CloudTAK (node-tak) w MissionAuthorization
     token = request.headers.get("Authorization")
+    if not token or "Bearer" not in token:
+        token = request.headers.get("MissionAuthorization")
     if not token or "Bearer" not in token:
         return False
 
@@ -2107,9 +2112,28 @@ def mission_contents(mission_name: str | None = None, mission_guid: str | None =
     )
 
 
+@mission_marti_api.route("/Marti/api/missions/guid/<mission_guid>/contents", methods=["DELETE"])
+# Literówka z upstream; zostaje dla klientów, które jej używają
 @mission_marti_api.route("/Marti/api/missions/gui/<mission_guid>/contents", methods=["DELETE"])
 @mission_marti_api.route("/Marti/api/missions/<mission_name>/contents", methods=["DELETE"])
 def delete_content(mission_name: str | None = None, mission_guid: str | None = None):
+    if mission_guid and not mission_name:
+        # Token misji niesie nazwę, a reszta funkcji szuka misji po nazwie
+        by_guid = db.session.execute(select(Mission).filter_by(guid=mission_guid)).scalar()
+        if not by_guid:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": gettext(
+                            "Mission %(mission_name)s not found", mission_name=mission_guid
+                        ),
+                    }
+                ),
+                404,
+            )
+        mission_name = by_guid.name
+
     if "iTAK" not in request.user_agent.string:
         token = verify_token()
         if not token or token["MISSION_NAME"] != mission_name:
@@ -2275,11 +2299,154 @@ def delete_content(mission_name: str | None = None, mission_guid: str | None = N
     "/Marti/api/missions/<mission_name>/contents/missionpackage", methods=["PUT"]
 )
 def add_content(mission_name):
-    client_uid = request.args.get("clientUid")
-    if "Authorization" not in request.headers or not verify_token():
+    """Paczka danych z CoT do misji (tak zapisuje CloudTAK).
+
+    Każde zdarzenie z plików .cot/.xml paczki dostaje <dest mission="<nazwa>"/> i idzie
+    do cot_parser tą samą drogą co CoT z połączenia urządzenia, więc misję obsługuje
+    generate_mission_change. Odpowiedź 200 dopiero po publikacji; CloudTAK potem
+    sprawdza uid w GET /Marti/api/missions/guid/<guid>.
+    """
+    token = verify_token()
+    if not token or token.get("MISSION_NAME") != mission_name:
         return jsonify({"success": False, "error": gettext("Missing or invalid token")}), 401
 
+    mission = db.session.execute(select(Mission).filter_by(name=mission_name)).scalar()
+    if not mission:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": gettext(
+                        "Mission %(mission_name)s not found", mission_name=mission_name
+                    ),
+                }
+            ),
+            404,
+        )
+
+    try:
+        events = read_mission_package_events(request.get_data(cache=False))
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+    for event in events:
+        set_mission_destination(event, mission.name)
+
+    sender_uid = (
+        token.get("sub") or request.args.get("creatorUid") or request.args.get("clientUid")
+    )
+    user_id = mission_package_user_id()
+
+    rabbit_credentials = pika.PlainCredentials(
+        app.config.get("OTS_RABBITMQ_USERNAME"), app.config.get("OTS_RABBITMQ_PASSWORD")
+    )
+    rabbit_connection = pika.BlockingConnection(
+        pika.ConnectionParameters(
+            host=app.config.get("OTS_RABBITMQ_SERVER_ADDRESS"), credentials=rabbit_credentials
+        )
+    )
+    channel = rabbit_connection.channel()
+    try:
+        properties = pika.BasicProperties(expiration=app.config.get("OTS_RABBITMQ_TTL"))
+        for event in events:
+            # Jak EudHandler.publish_cot: firehose dla wtyczek, cot_parser do przetworzenia
+            channel.basic_publish(
+                exchange="firehose",
+                routing_key="",
+                body=json.dumps({"uid": sender_uid, "cot": str(event)}),
+                properties=properties,
+            )
+            channel.basic_publish(
+                exchange="cot_parser",
+                routing_key="cot_parser",
+                body=json.dumps({"uid": sender_uid, "cot": str(event), "user_id": user_id}),
+                properties=properties,
+            )
+    finally:
+        channel.close()
+        rabbit_connection.close()
+
     return "", 200
+
+
+# Limit rozpakowanej treści paczki z CoT; chroni przed bombą zip
+MISSION_PACKAGE_MAX_BYTES = 10 * 1024 * 1024
+MISSION_PACKAGE_COT_SUFFIXES = (".cot", ".xml")
+
+
+def read_mission_package_events(data: bytes) -> list:
+    """Zdarzenia <event> z plików .cot/.xml paczki, w pamięci, bez zapisu na dysk.
+
+    Pomija MANIFEST i pliki innych typów. ValueError dla uszkodzonej paczki
+    albo przekroczonego limitu rozmiaru.
+    """
+    if len(data) > MISSION_PACKAGE_MAX_BYTES:
+        raise ValueError("Mission package too large")
+
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise ValueError("Invalid mission package")
+
+    events = []
+    total = 0
+    with archive:
+        for member in archive.infolist():
+            name = member.filename.lower()
+            if member.is_dir() or name.startswith("manifest/"):
+                continue
+            if not name.endswith(MISSION_PACKAGE_COT_SUFFIXES):
+                continue
+
+            total += member.file_size
+            if total > MISSION_PACKAGE_MAX_BYTES:
+                raise ValueError("Mission package too large")
+
+            try:
+                with archive.open(member) as handle:
+                    # file_size pochodzi z nagłówka; czytamy najwyżej o bajt więcej
+                    content = handle.read(member.file_size + 1)
+            except (zipfile.BadZipFile, RuntimeError, NotImplementedError) as e:
+                raise ValueError(f"Invalid mission package: {e}")
+            if len(content) > member.file_size:
+                raise ValueError("Invalid mission package")
+
+            event = BeautifulSoup(content, "xml").find("event")
+            if event is not None and event.attrs.get("uid"):
+                events.append(event)
+
+    return events
+
+
+def set_mission_destination(event, mission_name: str) -> None:
+    """Zostawia w zdarzeniu dokładnie jeden <dest mission="<nazwa>"/>."""
+    for destination in event.find_all("dest"):
+        if "mission" in destination.attrs:
+            destination.decompose()
+
+    soup = BeautifulSoup("", "xml")
+    detail = event.find("detail", recursive=False)
+    if detail is None:
+        detail = soup.new_tag("detail")
+        event.append(detail)
+    marti = detail.find("marti", recursive=False)
+    if marti is None:
+        marti = soup.new_tag("marti")
+        detail.append(marti)
+    marti.append(soup.new_tag("dest", attrs={"mission": mission_name}))
+
+
+def mission_package_user_id() -> int | None:
+    # Konto z certyfikatu klienta; bez niego CoT idzie jak od połączenia anonimowego
+    try:
+        cert = verify_client_cert()
+        if not cert:
+            return None
+        user = app.security.datastore.find_user(username=cert.get_subject().commonName)
+        return user.id if user else None
+    except Exception as e:
+        logger.warning(f"Failed to identify the mission package sender: {e}")
+        return None
 
 
 def mission_cots(mission_name: str) -> list[CoT]:
