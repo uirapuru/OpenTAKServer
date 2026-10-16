@@ -34,6 +34,7 @@ from sqlalchemy import insert, update, select
 
 from opentakserver.EmailValidator import EmailValidator
 from opentakserver.PasswordValidator import PasswordValidator
+from opentakserver.cot_parser.shared_mission import FEDERATION_USERNAME_PREFIX
 from opentakserver.defaultconfig import DefaultConfig
 from opentakserver.extensions import logger as ots_logger, db, ldap_manager
 from opentakserver.functions import iso8601_string_from_datetime, datetime_from_iso8601_string
@@ -492,13 +493,20 @@ class EudHandler(socketserver.BaseRequestHandler):
         """Invite this device to the shared mission (OTS_SHARED_MISSION).
 
         Skips when the feature is off, for CloudTAK's server-side connection,
-        within 10 minutes of the last invitation, when the device already has a
-        mission_roles row for the mission, and when an invitation row exists
-        (pending or blocked by the user in ATAK).
+        for federation technical accounts (fed_*), within 10 minutes of the last
+        invitation, when the device already has a mission_roles row for the
+        mission, and when an invitation row exists (sent earlier and not yet
+        consumed by a subscription). "Block invitations" in ATAK is local to the
+        device and leaves no row on the server.
         """
         mission_name = self.app.config.get("OTS_SHARED_MISSION")
         uid = self.uid
         if not mission_name or not uid or uid.startswith(SHARED_INVITE_SKIP_PREFIX):
+            return False
+
+        # Partnerzy z federacji nie dostają zaproszeń do mapy wspólnej
+        user = getattr(self, "user", None)
+        if user and (user.username or "").startswith(FEDERATION_USERNAME_PREFIX):
             return False
 
         now = time.monotonic()
@@ -528,7 +536,7 @@ class EudHandler(socketserver.BaseRequestHandler):
                     # może wisieć przez całą sesję urządzenia
                     db.session.close()
                     db.engine.dispose()
-        except BaseException as e:
+        except Exception as e:
             self.logger.error(f"Failed to invite {uid} to {mission_name}: {e}")
             self.logger.debug(traceback.format_exc())
             return False

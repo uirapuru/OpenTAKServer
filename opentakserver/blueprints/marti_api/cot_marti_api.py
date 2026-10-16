@@ -26,7 +26,10 @@ def get_cot(uid):
     logger.debug(request.headers)
     logger.debug(request.args)
 
-    cot = db.session.execute(db.session.query(CoT).filter_by(uid=uid)).first()
+    # Najnowsza wersja obiektu, nie dowolny wiersz
+    cot = db.session.execute(
+        db.session.query(CoT).filter_by(uid=uid).order_by(CoT.id.desc())
+    ).first()
     if not cot:
         return (
             jsonify({"success": False, "error": gettext("No CoT found for UID %(uid)s", uid=uid)}),

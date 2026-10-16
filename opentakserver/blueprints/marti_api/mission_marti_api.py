@@ -19,7 +19,7 @@ from flask import current_app as app
 from flask import has_request_context, jsonify, request
 from flask_babel import gettext
 from flask_security import current_user, hash_password, verify_password
-from sqlalchemy import insert, or_, select, update
+from sqlalchemy import func, insert, or_, select, update
 from werkzeug.utils import secure_filename
 
 from opentakserver.blueprints.marti_api.data_package_marti_api import save_data_package_file
@@ -2282,6 +2282,22 @@ def add_content(mission_name):
     return "", 200
 
 
+def mission_cots(mission_name: str) -> list[CoT]:
+    """Najnowsza wersja każdego obiektu, który dziś jest w misji (wiersz MissionUID).
+
+    Wcześniejsze wersje i obiekty zdjęte z misji zostają w tabeli cot, ale nowy
+    subskrybent ma dostać tylko stan bieżący.
+    """
+    members = select(MissionUID.uid).where(MissionUID.mission_name == mission_name)
+    latest = (
+        select(func.max(CoT.id))
+        .where(CoT.mission_name == mission_name, CoT.uid.in_(members))
+        .group_by(CoT.uid)
+    )
+    query = select(CoT).where(CoT.id.in_(latest)).order_by(CoT.id)
+    return list(db.session.execute(query).scalars())
+
+
 @mission_marti_api.route("/Marti/api/missions/<mission_name>/cot")
 @mission_marti_api.route("/Marti/api/missions/guid/<mission_guid>/cot")
 def get_mission_cots(mission_name: str = None, mission_guid: str = None):
@@ -2294,24 +2310,14 @@ def get_mission_cots(mission_name: str = None, mission_guid: str = None):
     if isinstance(permission_granted, flask.Response):
         return permission_granted
 
-    if mission_name:
-        cots = db.session.execute(db.session.query(CoT).filter_by(mission_name=mission_name)).all()
-    elif mission_guid:
+    if not mission_name and mission_guid:
         mission = db.session.execute(db.session.query(Mission).filter_by(guid=mission_guid)).first()
-        if mission:
-            mission_name = mission[0].name
-            cots = db.session.execute(
-                db.session.query(CoT).filter_by(mission_name=mission_name)
-            ).all()
-        else:
-            cots = []
-    else:
-        cots = []
+        mission_name = mission[0].name if mission else None
 
     events = Element("events")
 
-    for cot in cots:
-        events.append(fromstring(cot[0].xml))
+    for cot in mission_cots(mission_name) if mission_name else []:
+        events.append(fromstring(cot.xml))
 
     return Response(
         response=tostring(events).decode("utf-8"), status=200, mimetype="application/xml"

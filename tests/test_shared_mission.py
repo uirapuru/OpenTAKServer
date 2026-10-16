@@ -437,3 +437,176 @@ def test_forced_delete_when_feature_disabled_does_nothing(shared_app, controller
     deliver(controller, delete_xml("shape-1"))
 
     assert mission_uids(shared_app) == {"shape-1": SHARED}
+
+
+# --- końcowa runda poprawek ---
+
+
+TO_SHARED = f'<marti><dest mission="{SHARED}"/></marti>'
+TO_OTHER = f'<marti><dest mission="{OTHER}"/></marti>'
+
+
+def marker_xml(event_uid, callsign, detail=""):
+    return raw_xml(
+        event_uid,
+        "b-m-p-s-m",
+        '<point lat="52.1" lon="21.0" hae="0" ce="1" le="1"/>'
+        f'<detail><contact callsign="{callsign}"/>{detail}</detail>',
+    )
+
+
+@pytest.fixture
+def mission_api(shared_app, monkeypatch):
+    import importlib
+
+    module = importlib.import_module("opentakserver.blueprints.marti_api.mission_marti_api")
+    # Token misji nie jest przedmiotem tego testu
+    monkeypatch.setattr(module, "check_permission", lambda *a, **k: True)
+    return shared_app.test_client()
+
+
+def mission_cot_callsigns(client, name=SHARED):
+    response = client.get(f"/Marti/api/missions/{name}/cot")
+    assert response.status_code == 200
+    events = BeautifulSoup(response.data, "xml").find_all("event")
+    return sorted(
+        (event.attrs["uid"], event.find("contact").attrs["callsign"]) for event in events
+    )
+
+
+def test_late_joiner_gets_latest_version_of_each_object(shared_app, controller, mission_api):
+    deliver(controller, marker_xml("point-1", "Pierwszy"))
+    deliver(controller, marker_xml("point-2", "Drugi"))
+    deliver(controller, marker_xml("point-1", "Pierwszy po edycji"))
+
+    assert mission_cot_callsigns(mission_api) == [
+        ("point-1", "Pierwszy po edycji"),
+        ("point-2", "Drugi"),
+    ]
+
+    deliver(controller, delete_xml("point-1"))
+
+    assert mission_cot_callsigns(mission_api) == [("point-2", "Drugi")]
+
+
+def test_late_joiner_gets_edit_sent_to_the_mission(shared_app, controller, mission_api):
+    deliver(controller, marker_xml("point-1", "Pierwszy"))
+    dest = TO_SHARED
+    deliver(controller, marker_xml("point-1", "Edycja z misji", dest))
+
+    assert mission_cot_callsigns(mission_api) == [("point-1", "Edycja z misji")]
+
+
+def test_cot_xml_returns_newest_version(shared_app, controller):
+    deliver(controller, marker_xml("point-1", "Stary"))
+    deliver(controller, marker_xml("point-1", "Nowy"))
+
+    response = shared_app.test_client().get("/Marti/api/cot/xml/point-1")
+
+    assert response.status_code == 200
+    event = BeautifulSoup(response.data, "xml").find("event")
+    assert event.find("contact").attrs["callsign"] == "Nowy"
+
+
+def test_dest_mission_does_not_pull_object_out_of_another_mission(shared_app, controller):
+    deliver(controller, marker_xml("point-9", "W innej", TO_OTHER))
+    changes_before = mission_changes(shared_app)
+    controller.rabbit_channel.published.clear()
+
+    deliver(controller, marker_xml("point-9", "Do wspólnej", TO_SHARED))
+
+    assert mission_uids(shared_app) == {"point-9": OTHER}
+    assert mission_changes(shared_app) == changes_before
+    assert mission_publications(controller) == []
+
+
+def test_dest_mission_does_not_pull_object_out_of_shared_mission(shared_app, controller):
+    deliver(controller, marker_xml("point-1", "We wspólnej"))
+    changes_before = mission_changes(shared_app)
+    controller.rabbit_channel.published.clear()
+
+    deliver(controller, marker_xml("point-1", "Do innej", TO_OTHER))
+
+    assert mission_uids(shared_app) == {"point-1": SHARED}
+    assert mission_changes(shared_app) == changes_before
+    assert mission_publications(controller) == []
+
+
+def group_publications(controller):
+    return [p for p in controller.rabbit_channel.published if p["exchange"] == "groups"]
+
+
+def test_edit_sent_to_shared_mission_also_goes_to_groups(shared_app, controller):
+    deliver(controller, marker_xml("point-1", "Pierwszy"))
+    controller.rabbit_channel.published.clear()
+
+    deliver(controller, marker_xml("point-1", "Edycja", TO_SHARED))
+
+    [publication] = group_publications(controller)
+    assert publication["routing_key"] == "__ANON__.OUT"
+    assert 'callsign="Edycja"' in publication["body"]["cot"]
+
+
+def test_edit_sent_to_other_mission_stays_in_that_mission(shared_app, controller):
+    deliver(controller, marker_xml("point-9", "Inny", TO_OTHER))
+
+    assert group_publications(controller) == []
+
+
+def test_edit_sent_to_shared_mission_without_feature_is_not_broadcast(shared_app, controller):
+    shared_app.config["OTS_SHARED_MISSION"] = ""
+
+    deliver(controller, marker_xml("point-1", "Edycja", TO_SHARED))
+
+    assert group_publications(controller) == []
+
+
+def test_position_report_costs_no_user_lookup(shared_app, controller):
+    user_id = make_user(shared_app, "kaszub")
+    controller.get_username = MagicMock(return_value="kaszub")
+
+    deliver(controller, make_xml(SENDER_UID, "a-f-G-U-C"), user_id=user_id)
+
+    controller.get_username.assert_not_called()
+
+
+def timed_xml(event_uid, start, stale):
+    return (
+        f'<event version="2.0" uid="{event_uid}" type="a-h-A-M-F-Q" how="m-g" '
+        f'time="{start}" start="{start}" stale="{stale}">'
+        '<point lat="52.1" lon="21.0" hae="0" ce="1" le="1"/>'
+        f'<detail><contact callsign="{event_uid}"/></detail></event>'
+    )
+
+
+def test_is_shareable_skips_transient_tracks():
+    from opentakserver.cot_parser.shared_mission import is_shareable
+
+    short = parse(timed_xml("uas-1", "2026-10-16T10:00:00Z", "2026-10-16T10:04:59Z"))
+    long = parse(timed_xml("uas-1", "2026-10-16T10:00:00.123Z", "2026-10-16T10:05:00.123Z"))
+
+    assert is_shareable(short, SENDER_UID) is False
+    assert is_shareable(long, SENDER_UID) is True
+
+
+@pytest.mark.parametrize(
+    "start,stale",
+    [("", "2026-10-16T10:01:00Z"), ("2026-10-16T10:00:00Z", "wczoraj"), (None, None)],
+)
+def test_is_shareable_with_missing_or_bad_times_shares(start, stale):
+    from opentakserver.cot_parser.shared_mission import is_shareable
+
+    event = parse(timed_xml("uas-1", "x", "x"))
+    for name, value in (("start", start), ("stale", stale)):
+        if value is None:
+            del event.attrs[name]
+        else:
+            event.attrs[name] = value
+
+    assert is_shareable(event, SENDER_UID) is True
+
+
+def test_transient_track_stays_out_of_mission(shared_app, controller):
+    deliver(controller, timed_xml("uas-1", "2026-10-16T10:00:00Z", "2026-10-16T10:00:20Z"))
+
+    assert mission_uids(shared_app) == {}

@@ -2,8 +2,8 @@
 
 ATAK z datasyncAutoAcceptInvite=true subskrybuje sam po zaproszeniu. OTS
 zaprasza tylko urządzenie bez wiersza mission_roles i bez wiersza zaproszenia
-(ten zostaje, gdy użytkownik zablokował zaproszenia albo subskrypcja padła),
-najwyżej raz na 10 minut.
+(ten zostaje, dopóki subskrypcja go nie zużyje; „Block invitations” w ATAK
+działa lokalnie i na serwerze nie zostawia śladu), najwyżej raz na 10 minut.
 """
 
 import json
@@ -321,3 +321,19 @@ def test_pool_disposed_and_no_raise_when_publish_fails(shared_app, monkeypatch, 
     assert dispose_spy == [0]
     # Nieudana próba nie blokuje ponownej na 10 minut
     assert eud_handler_module._shared_invites == {}
+
+
+def test_federation_account_is_not_invited(shared_app, channel):
+    handler = make_handler(shared_app)
+    handler.user = MagicMock(username="fed_partner")
+
+    assert handler.maybe_invite_shared_mission() is False
+    assert invitations(shared_app) == []
+    assert channel.published == []
+
+
+def test_regular_account_is_invited(shared_app, channel):
+    handler = make_handler(shared_app)
+    handler.user = MagicMock(username="kaszub")
+
+    assert handler.maybe_invite_shared_mission() is True

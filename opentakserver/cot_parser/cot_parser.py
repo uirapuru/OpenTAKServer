@@ -26,7 +26,7 @@ from flask_socketio import SocketIO
 from meshtastic import BROADCAST_NUM, mesh_pb2, mqtt_pb2, portnums_pb2
 from opentakserver.models.GroupUser import GroupUser
 from pika.channel import Channel
-from sqlalchemy import exc, insert, select, update
+from sqlalchemy import exc, func, insert, select, update
 
 from opentakserver.cot_parser.tdd import is_self_delete
 from opentakserver.cot_parser.shared_mission import (
@@ -1097,6 +1097,26 @@ class CoTController:
         """
         event_uid = event.attrs["uid"]
 
+        # Obiekt należący do innej misji zostaje tam, gdzie jest: <dest mission=X> nie może
+        # wyciągnąć obiektu z misji, do której nadawca nie musi mieć dostępu
+        existing = db.session.get(MissionUID, event_uid)
+        latest_cot_id = (
+            select(func.max(CoT.id)).where(CoT.uid == event_uid).scalar_subquery()
+        )
+        if existing and existing.mission_name and existing.mission_name != mission.name:
+            self.logger.info(
+                f"{event_uid} belongs to mission {existing.mission_name}, "
+                f"not adding it to {mission.name}"
+            )
+            # insert_cot oznaczył ten wiersz misją z <dest>; obiekt do niej nie należy
+            db.session.execute(
+                update(CoT)
+                .where(CoT.id == latest_cot_id, CoT.mission_name == mission.name)
+                .values(mission_name=None)
+            )
+            db.session.commit()
+            return
+
         self.rabbit_channel.basic_publish(
             "missions",
             routing_key=f"missions.{mission.name}",
@@ -1107,7 +1127,14 @@ class CoTController:
         values = self.mission_uid_values(event)
         values["mission_name"] = mission.name
 
-        if db.session.get(MissionUID, event_uid):
+        # Najnowszy wiersz CoT obiektu (insert_cot działa wcześniej w on_message) należy
+        # do misji: z niego GET /Marti/api/missions/<n>/cot buduje treść dla nowych
+        # subskrybentów
+        db.session.execute(
+            update(CoT).where(CoT.id == latest_cot_id).values(mission_name=mission.name)
+        )
+
+        if existing:
             self.update_mission_uid(event_uid, values)
         else:
             try:
@@ -1169,15 +1196,7 @@ class CoTController:
                 self.logger.error(f"No such shared mission found: {mission_name}")
                 return
 
-            # Obiekt z innej misji zostaje tam, gdzie jest
-            existing = db.session.get(MissionUID, event.attrs["uid"])
-            if existing and existing.mission_name and existing.mission_name != mission_name:
-                self.logger.info(
-                    f"{event.attrs['uid']} belongs to mission {existing.mission_name}, "
-                    f"not adding it to {mission_name}"
-                )
-                return
-
+            # Obiekt z innej misji zostaje tam, gdzie jest (sprawdza add_to_mission)
             self.add_to_mission(mission, sender_uid, event)
 
     def remove_from_mission(self, target_uid: str, creator_uid: str | None = None) -> None:
@@ -1259,15 +1278,20 @@ class CoTController:
             return
 
         try:
+            # Najpierw tanie reguły bez bazy: pozycja własna i reszta zdarzeń, które i tak
+            # nie dotyczą misji, nie kosztują zapytania o użytkownika
+            target_uid = forced_delete_target(event)
+            if not target_uid and not is_shareable(event, sender_uid):
+                return
+
             # Konta techniczne federacji ani nie dopisują, ani nie zdejmują z mapy wspólnej:
             # partnerzy mają mniejsze zaufanie niż użytkownicy lokalni
             if self.get_username(user_id).startswith(FEDERATION_USERNAME_PREFIX):
                 return
 
-            target_uid = forced_delete_target(event)
             if target_uid:
                 self.remove_from_mission(target_uid, sender_uid)
-            elif event.attrs.get("type") != "t-x-d-d":
+            else:
                 self.share_to_mission(event, sender_uid)
         except Exception as e:
             self.logger.error(f"Shared mission update failed: {e}")
@@ -1351,6 +1375,14 @@ class CoTController:
                     )
 
                 # CoT messages belonging to Data Sync missions (i.e. <dest mission="mission name" /> are handled by cot_parser
+
+        # Misja wspólna jest z definicji publiczna: edycja wysłana z ATAK do niej
+        # (<dest mission="<wspólna>">) idzie też do grup nadawcy jak zdarzenie rozgłoszone
+        shared_name = self.context.app.config.get("OTS_SHARED_MISSION")
+        if destinations and shared_name and any(
+            destination.attrs.get("mission") == shared_name for destination in destinations
+        ):
+            destinations = []
 
         if not destinations and not user_id:
             # Publish all CoT messages received by TCP and that have no destination to the __ANON__ group
