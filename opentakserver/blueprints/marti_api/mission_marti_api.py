@@ -1403,11 +1403,40 @@ def put_mission_keywords(mission_name):
     )
 
 
+def create_cloudtak_eud(uid: str, user) -> tuple | None:
+    """Wiersz euds dla CloudTAK, który nie wysłał jeszcze pozycji własnej.
+
+    OTS zakłada urządzenie dopiero po pozycji własnej, a CloudTAK w przeglądarce bez
+    lokalizacji jej nie wysyła. Tylko dla uid dokładnie ANDROID-CloudTAK-<użytkownik
+    z certyfikatu>; każdy inny uid zostaje odrzucony jak dotąd.
+    """
+    if not user or uid != f"ANDROID-CloudTAK-{user.username}":
+        return None
+
+    eud = EUD()
+    eud.uid = uid
+    eud.user_id = user.id
+    # callsign jest unikalny; zajęty zostaje pusty do pierwszej pozycji własnej
+    taken = db.session.execute(select(EUD.id).filter_by(callsign=user.username)).first()
+    eud.callsign = None if taken else user.username
+    try:
+        db.session.add(eud)
+        db.session.commit()
+    except sqlalchemy.exc.IntegrityError:
+        # Równoległe żądanie założyło ten sam wiersz
+        db.session.rollback()
+    logger.info(f"Created EUD {uid} for CloudTAK user {user.username}")
+    return db.session.execute(db.session.query(EUD).filter_by(uid=uid)).first()
+
+
 @mission_marti_api.route("/Marti/api/missions/<mission_name>/subscription", methods=["PUT"])
 @mission_marti_api.route("/Marti/api/missions/guid/<mission_guid>/subscription", methods=["PUT"])
 def mission_subscribe(mission_name: str = None, mission_guid: str = None):
     """Used by the Data Sync plugin to subscribe to a feed"""
     cert = verify_client_cert()
+    if not cert:
+        # Wcześniej kończyło się wyjątkiem (500) na cert.get_subject()
+        return jsonify({"success": False, "error": gettext("Missing client certificate")}), 400
     username = cert.get_subject().commonName
     user = app.security.datastore.find_user(username=username)
 
@@ -1521,6 +1550,8 @@ def mission_subscribe(mission_name: str = None, mission_guid: str = None):
 
         uid = bleach.clean(request.args.get("uid"))
         eud = db.session.execute(db.session.query(EUD).filter_by(uid=uid)).first()
+        if not eud:
+            eud = create_cloudtak_eud(uid, user)
         if not eud:
             return (
                 jsonify({"success": False, "error": gettext("Invalid UID: %(uid)s", uid=uid)}),
