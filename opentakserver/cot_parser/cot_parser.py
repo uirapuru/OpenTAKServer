@@ -1037,115 +1037,117 @@ class CoTController:
                 db.session.commit()
 
     def generate_mission_change(self, uid: str, event: BeautifulSoup):
-        destinations = event.find_all("dest")
-        mission_changes = []
+        for destination in event.find_all("dest"):
+            if "mission" not in destination.attrs:
+                continue
 
-        if not destinations:
-            return
+            with self.context:
+                mission = db.session.execute(
+                    select(Mission).filter_by(name=destination.attrs["mission"])
+                ).scalar()
 
-        for destination in destinations:
-            if "mission" in destination.attrs:
-                with self.context:
-                    mission = db.session.execute(
-                        db.session.query(Mission).filter_by(name=destination.attrs["mission"])
-                    ).first()
+                if not mission:
+                    self.logger.error(f"No such mission found: {destination.attrs['mission']}")
+                    continue
 
-                    if not mission:
-                        self.logger.error(f"No such mission found: {destination.attrs['mission']}")
-                        return
+                self.add_to_mission(mission, uid, event)
 
-                    mission = mission[0]
-                    self.rabbit_channel.basic_publish(
-                        "missions",
-                        routing_key=f"missions.{destination.attrs['mission']}",
-                        body=json.dumps({"uid": uid, "cot": str(event)}),
-                        properties=pika.BasicProperties(
-                            expiration=app.config.get("OTS_RABBITMQ_TTL")
-                        ),
-                    )
+    @staticmethod
+    def mission_uid_values(event: BeautifulSoup) -> dict:
+        # Pola MissionUID ze zdarzenia; brakujący element nie nadpisuje zapisanej wartości
+        values = {
+            "timestamp": datetime_from_iso8601_string(event.attrs["start"]),
+            "cot_type": event.attrs["type"],
+        }
 
-                    mission_uid = db.session.execute(
-                        db.session.query(MissionUID).filter_by(uid=event.attrs["uid"])
-                    ).first()
+        color = event.find("color")
+        icon = event.find("usericon")
+        point = event.find("point")
+        contact = event.find("contact")
 
-                    if not mission_uid:
-                        mission_uid = MissionUID()
-                        mission_uid.uid = event.attrs["uid"]
-                        mission_uid.mission_name = destination.attrs["mission"]
-                        mission_uid.timestamp = datetime_from_iso8601_string(event.attrs["start"])
-                        mission_uid.creator_uid = uid
-                        mission_uid.cot_type = event.attrs["type"]
+        if color and "argb" in color.attrs:
+            values["color"] = color.attrs["argb"]
+        elif color and "value" in color.attrs:
+            values["color"] = color.attrs["value"]
+        if icon and "iconsetpath" in icon.attrs:
+            values["iconset_path"] = icon.attrs["iconsetpath"]
+        elif icon and "iconsetPath" in icon.attrs:
+            values["iconset_path"] = icon.attrs["iconsetPath"]
+        if point:
+            values["latitude"] = float(point.attrs["lat"])
+            values["longitude"] = float(point.attrs["lon"])
+        if contact and "callsign" in contact.attrs:
+            values["callsign"] = contact.attrs["callsign"]
 
-                        color = event.find("color")
-                        icon = event.find("usericon")
-                        point = event.find("point")
-                        contact = event.find("contact")
+        return values
 
-                        if color and "argb" in color.attrs:
-                            mission_uid.color = color.attrs["argb"]
-                        elif color and "value" in color.attrs:
-                            mission_uid.color = color.attrs["value"]
-                        if icon:
-                            mission_uid.iconset_path = icon["iconsetpath"]
-                        if point:
-                            mission_uid.latitude = float(point.attrs["lat"])
-                            mission_uid.longitude = float(point.attrs["lon"])
-                        if contact:
-                            mission_uid.callsign = contact.attrs["callsign"]
+    def add_to_mission(self, mission: Mission, uid: str, event: BeautifulSoup) -> None:
+        """Dopisuje obiekt do misji albo zapisuje nową wersję obiektu, który już w niej jest.
 
-                        try:
-                            db.session.add(mission_uid)
-                            db.session.commit()
-                        except sqlalchemy.exc.IntegrityError:
-                            db.session.rollback()
-                            db.session.execute(update(MissionUID).values(**mission_uid.serialize()))
+        Za każdym razem: surowe CoT na missions.<nazwa>, wiersz MissionChange(ADD_CONTENT)
+        i t-x-m-c. Data Sync w ATAK zna tylko ADD_CONTENT i REMOVE_CONTENT, więc edycja
+        to kolejne ADD_CONTENT. Bez t-x-m-c ATAK po ok. 11 s pokazuje
+        "Failed to publish map item". Wołać w kontekście aplikacji.
+        """
+        event_uid = event.attrs["uid"]
 
-                        mission_change = MissionChange()
-                        mission_change.isFederatedChange = False
-                        mission_change.change_type = MissionChange.ADD_CONTENT
-                        mission_change.mission_name = destination.attrs["mission"]
-                        mission_change.timestamp = datetime_from_iso8601_string(
-                            event.attrs["start"]
-                        )
-                        mission_change.creator_uid = uid
-                        mission_change.server_time = datetime_from_iso8601_string(
-                            event.attrs["start"]
-                        )
-                        mission_change.mission_uid = event.attrs["uid"]
+        self.rabbit_channel.basic_publish(
+            "missions",
+            routing_key=f"missions.{mission.name}",
+            body=json.dumps({"uid": uid, "cot": str(event)}),
+            properties=pika.BasicProperties(expiration=app.config.get("OTS_RABBITMQ_TTL")),
+        )
 
-                        change_pk = db.session.execute(
-                            insert(MissionChange).values(**mission_change.serialize())
-                        )
-                        db.session.commit()
+        values = self.mission_uid_values(event)
+        values["mission_name"] = mission.name
 
-                        body = {
-                            "uid": self.context.app.config.get("OTS_NODE_ID"),
-                            "cot": tostring(
-                                generate_mission_change_cot(
-                                    mission_name=str(destination.attrs["mission"]),
-                                    mission=mission,
-                                    mission_change=mission_change,
-                                    cot_event=event,
-                                )
-                            ).decode("utf-8"),
-                        }
-                        mission_changes.append({"mission": mission.name, "message": body})
-                        self.rabbit_channel.basic_publish(
-                            "missions",
-                            routing_key=f"missions.{mission.name}",
-                            body=json.dumps(body),
-                        )
+        if db.session.get(MissionUID, event_uid):
+            self.update_mission_uid(event_uid, values)
+        else:
+            try:
+                db.session.add(MissionUID(uid=event_uid, creator_uid=uid, **values))
+                db.session.commit()
+            except sqlalchemy.exc.IntegrityError:
+                # Ten sam uid dopisany równolegle: aktualizujemy tylko jego wiersz
+                db.session.rollback()
+                self.update_mission_uid(event_uid, values)
 
-        if mission_changes:
-            for change in mission_changes:
-                self.rabbit_channel.basic_publish(
-                    "missions",
-                    routing_key=f"missions.{change['mission']}",
-                    body=json.dumps(change["message"]),
-                    properties=pika.BasicProperties(
-                        expiration=self.context.app.config.get("OTS_RABBITMQ_TTL")
-                    ),
+        mission_change = MissionChange()
+        mission_change.isFederatedChange = False
+        mission_change.change_type = MissionChange.ADD_CONTENT
+        mission_change.mission_name = mission.name
+        mission_change.timestamp = datetime_from_iso8601_string(event.attrs["start"])
+        mission_change.creator_uid = uid
+        mission_change.server_time = datetime_from_iso8601_string(event.attrs["start"])
+        mission_change.mission_uid = event_uid
+
+        db.session.execute(insert(MissionChange).values(**mission_change.serialize()))
+        db.session.commit()
+
+        body = {
+            "uid": self.context.app.config.get("OTS_NODE_ID"),
+            "cot": tostring(
+                generate_mission_change_cot(
+                    mission_name=mission.name,
+                    mission=mission,
+                    mission_change=mission_change,
+                    cot_event=event,
                 )
+            ).decode("utf-8"),
+        }
+        self.rabbit_channel.basic_publish(
+            "missions",
+            routing_key=f"missions.{mission.name}",
+            body=json.dumps(body),
+            properties=pika.BasicProperties(
+                expiration=self.context.app.config.get("OTS_RABBITMQ_TTL")
+            ),
+        )
+
+    @staticmethod
+    def update_mission_uid(event_uid: str, values: dict) -> None:
+        db.session.execute(update(MissionUID).where(MissionUID.uid == event_uid).values(**values))
+        db.session.commit()
 
     def get_username(self, user_id):
         if not user_id:
