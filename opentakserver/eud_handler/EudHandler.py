@@ -1,4 +1,5 @@
 import base64
+import codecs
 import datetime
 import json
 import logging
@@ -94,6 +95,10 @@ class EudHandler(socketserver.BaseRequestHandler):
 
     def handle(self):
         cot = ""
+        # Incremental decoder: a multi-byte UTF-8 character split across two
+        # recv() chunks (e.g. two TLS records) waits for its remaining bytes
+        # instead of raising UnicodeDecodeError and dropping the connection.
+        decoder = codecs.getincrementaldecoder("utf-8")()
 
         while not self.shutdown:
             try:
@@ -105,7 +110,7 @@ class EudHandler(socketserver.BaseRequestHandler):
                 self.logger.debug("no data")
                 break
 
-            cot += data.decode("utf-8")
+            cot += decoder.decode(data)
             cot_list = re.split("</event>|</auth>", cot)
 
             if len(cot_list) < 2:
