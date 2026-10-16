@@ -2,7 +2,7 @@
 
 Obiekt rozgłoszony (zdarzenie bez żadnego <dest>) trafia do misji wspólnej, gdy jest
 rysunkiem, trasą, punktem albo jednostką, ale nie jest własną pozycją nadawcy, czatem
-ani zdarzeniem grupy. t-x-d-d z <__forcedelete/> zdejmuje obiekt z misji.
+ani zdarzeniem grupy. t-x-d-d z <__forcedelete/> zdejmuje obiekt z misji wspólnej.
 
 Moduł zależy tylko od bs4, żeby dało się go testować bez aplikacji.
 """
@@ -10,6 +10,8 @@ Moduł zależy tylko od bs4, żeby dało się go testować bez aplikacji.
 SHAREABLE_PREFIXES = ("u-d-", "b-m-p-", "a-")
 SHAREABLE_TYPES = ("b-m-r",)
 NEVER_PREFIXES = ("t-", "b-t-f", "y-", "b-a-")
+# Konta techniczne federacji zakładane przez taklab
+FEDERATION_USERNAME_PREFIX = "fed_"
 
 
 def is_broadcast(event) -> bool:

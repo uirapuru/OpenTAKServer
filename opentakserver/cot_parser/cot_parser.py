@@ -29,7 +29,12 @@ from pika.channel import Channel
 from sqlalchemy import exc, insert, select, update
 
 from opentakserver.cot_parser.tdd import is_self_delete
-from opentakserver.cot_parser.shared_mission import forced_delete_target, is_broadcast, is_shareable
+from opentakserver.cot_parser.shared_mission import (
+    FEDERATION_USERNAME_PREFIX,
+    forced_delete_target,
+    is_broadcast,
+    is_shareable,
+)
 from opentakserver.defaultconfig import DefaultConfig
 from opentakserver.extensions import db, logger
 from opentakserver.functions import *
@@ -1148,7 +1153,9 @@ class CoTController:
     def shared_mission_name(self) -> str:
         return self.context.app.config.get("OTS_SHARED_MISSION") or ""
 
-    def share_to_mission(self, uid: str, event: BeautifulSoup, sender_uid: str) -> None:
+    def share_to_mission(
+        self, event: BeautifulSoup, sender_uid: str, user_id: int | None = None
+    ) -> None:
         """Dopisuje rozgłoszony obiekt do misji wspólnej.
 
         Jako twórca zmiany idzie uid urządzenia nadawcy: ATAK zdejmuje oczekującą publikację
@@ -1158,23 +1165,42 @@ class CoTController:
         if not mission_name or not is_shareable(event, sender_uid):
             return
 
+        # Obiekty z kont technicznych federacji nie trafiają na mapę wspólną
+        if self.get_username(user_id).startswith(FEDERATION_USERNAME_PREFIX):
+            return
+
         with self.context:
             mission = db.session.execute(select(Mission).filter_by(name=mission_name)).scalar()
             if not mission:
                 self.logger.error(f"No such shared mission found: {mission_name}")
                 return
 
+            # Obiekt z innej misji zostaje tam, gdzie jest
+            existing = db.session.get(MissionUID, event.attrs["uid"])
+            if existing and existing.mission_name and existing.mission_name != mission_name:
+                self.logger.info(
+                    f"{event.attrs['uid']} belongs to mission {existing.mission_name}, "
+                    f"not adding it to {mission_name}"
+                )
+                return
+
             self.add_to_mission(mission, sender_uid, event)
 
     def remove_from_mission(self, target_uid: str, creator_uid: str | None = None) -> None:
-        """Zdejmuje obiekt z misji, w której jest, jak DELETE /Marti/api/missions/<n>/contents?uid=.
+        """Zdejmuje obiekt z misji wspólnej, jak DELETE /Marti/api/missions/<n>/contents?uid=.
 
         Zapisuje MissionChange(REMOVE_CONTENT), czyści MissionUID.mission_name
         i CoT.mission_name, wysyła t-x-m-c do subskrybentów tej misji.
         """
+        shared_name = self.shared_mission_name()
+        if not shared_name:
+            return
+
         with self.context:
             mission_uid = db.session.get(MissionUID, target_uid)
-            if not mission_uid or not mission_uid.mission_name:
+            # Tylko misja wspólna: rozgłoszone t-x-d-d nie zdejmuje z misji, do których
+            # nadawca nie musi mieć dostępu
+            if not mission_uid or mission_uid.mission_name != shared_name:
                 return
 
             mission_name = mission_uid.mission_name
@@ -1231,9 +1257,11 @@ class CoTController:
                 ),
             )
 
-    def handle_shared_mission(self, event: BeautifulSoup, sender_uid: str | None) -> None:
-        # Tylko zdarzenia rozgłoszone; błąd misji nie może zatrzymać routingu zdarzenia
-        if not self.shared_mission_name() or not is_broadcast(event):
+    def handle_shared_mission(
+        self, event: BeautifulSoup, sender_uid: str | None, user_id: int | None
+    ) -> None:
+        # Tylko zdarzenia rozgłoszone od urządzenia; błąd misji nie może zatrzymać routingu
+        if not self.shared_mission_name() or not sender_uid or not is_broadcast(event):
             return
 
         try:
@@ -1241,8 +1269,8 @@ class CoTController:
             if target_uid:
                 self.remove_from_mission(target_uid, sender_uid)
             elif event.attrs.get("type") != "t-x-d-d":
-                self.share_to_mission(sender_uid, event, sender_uid)
-        except BaseException as e:
+                self.share_to_mission(event, sender_uid, user_id)
+        except Exception as e:
             self.logger.error(f"Shared mission update failed: {e}")
             self.logger.debug(traceback.format_exc())
 
@@ -1411,7 +1439,7 @@ class CoTController:
                 self.parse_rbline(event, uid, point_pk, cot_pk)
                 self.parse_stats(event, uid)
                 self.generate_mission_change(uid, event)
-                self.handle_shared_mission(event, uid)
+                self.handle_shared_mission(event, uid, body.get("user_id"))
                 self.route_cot(event, uid, body.get("user_id"))
                 self.rabbit_channel.basic_ack(delivery_tag=basic_deliver.delivery_tag)
 

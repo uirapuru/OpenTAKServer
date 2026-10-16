@@ -90,8 +90,8 @@ def controller(shared_app):
     return parser
 
 
-def deliver(controller, xml, sender_uid=SENDER_UID):
-    body = json.dumps({"uid": sender_uid, "cot": xml, "user_id": None}).encode()
+def deliver(controller, xml, sender_uid=SENDER_UID, user_id=None):
+    body = json.dumps({"uid": sender_uid, "cot": xml, "user_id": user_id}).encode()
     controller.on_message(controller.rabbit_channel, MagicMock(), None, body)
 
 
@@ -291,6 +291,59 @@ def test_event_without_point_still_publishes_change(shared_app, controller):
     assert details.find("location") is None
 
 
+def test_object_in_another_mission_is_not_moved(shared_app, controller):
+    xml = make_xml("point-9", "b-m-p-s-m", f'<marti><dest mission="{OTHER}"/></marti>')
+    deliver(controller, xml)
+    changes_before = mission_changes(shared_app)
+    controller.rabbit_channel.published.clear()
+
+    deliver(controller, make_xml("point-9", "b-m-p-s-m"))
+
+    assert mission_uids(shared_app) == {"point-9": OTHER}
+    assert mission_changes(shared_app) == changes_before
+    assert mission_publications(controller) == []
+
+
+def test_object_removed_from_shared_mission_comes_back(shared_app, controller):
+    deliver(controller, make_xml("shape-1", "u-d-f"))
+    deliver(controller, delete_xml("shape-1"))
+    assert mission_uids(shared_app) == {"shape-1": None}
+
+    deliver(controller, make_xml("shape-1", "u-d-f"))
+
+    assert mission_uids(shared_app) == {"shape-1": SHARED}
+
+
+def make_user(app, username):
+    from flask_security import hash_password
+
+    from opentakserver.extensions import db
+
+    with app.app_context():
+        user = app.security.datastore.create_user(
+            username=username, password=hash_password("secret")
+        )
+        db.session.commit()
+        return user.id
+
+
+def test_federation_account_objects_stay_out(shared_app, controller):
+    user_id = make_user(shared_app, "fed_partner")
+
+    deliver(controller, make_xml("shape-1", "u-d-f"), user_id=user_id)
+
+    assert mission_uids(shared_app) == {}
+    assert mission_publications(controller) == []
+
+
+def test_regular_account_objects_go_in(shared_app, controller):
+    user_id = make_user(shared_app, "kaszub")
+
+    deliver(controller, make_xml("shape-1", "u-d-f"), user_id=user_id)
+
+    assert mission_uids(shared_app) == {"shape-1": SHARED}
+
+
 # --- on_message: usuwanie (t-x-d-d) ---
 
 
@@ -317,18 +370,31 @@ def test_forced_delete_removes_object_from_shared_mission(shared_app, controller
     assert cot.find("MissionChange").find("creatorUid").text == SENDER_UID
 
 
-def test_forced_delete_removes_object_from_another_mission(shared_app, controller):
+def test_forced_delete_leaves_object_in_another_mission(shared_app, controller):
+    # Rozgłoszone t-x-d-d nie może zdejmować obiektów z misji, do których nadawca
+    # nie musi mieć dostępu: działa tylko na misji wspólnej
     xml = make_xml("point-9", "b-m-p-s-m", f'<marti><dest mission="{OTHER}"/></marti>')
     deliver(controller, xml)
     assert mission_uids(shared_app) == {"point-9": OTHER}
+    changes_before = mission_changes(shared_app)
     controller.rabbit_channel.published.clear()
 
     deliver(controller, delete_xml("point-9"))
 
-    assert mission_uids(shared_app) == {"point-9": None}
-    assert mission_changes(shared_app)[-1] == ("REMOVE_CONTENT", "point-9", OTHER)
-    [(routing_key, _)] = change_cots(controller)
-    assert routing_key == f"missions.{OTHER}"
+    assert mission_uids(shared_app) == {"point-9": OTHER}
+    assert mission_changes(shared_app) == changes_before
+    assert mission_publications(controller) == []
+
+
+def test_forced_delete_without_sender_does_nothing(shared_app, controller):
+    deliver(controller, make_xml("shape-1", "u-d-f"))
+    controller.rabbit_channel.published.clear()
+
+    deliver(controller, delete_xml("shape-1"), sender_uid=shared_app.config["OTS_NODE_ID"])
+
+    assert mission_uids(shared_app) == {"shape-1": SHARED}
+    assert [c[0] for c in mission_changes(shared_app)] == ["ADD_CONTENT"]
+    assert change_cots(controller) == []
 
 
 def test_delete_without_forcedelete_does_nothing(shared_app, controller):
