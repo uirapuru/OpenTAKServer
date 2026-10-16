@@ -368,6 +368,8 @@ def test_forced_delete_removes_object_from_shared_mission(shared_app, controller
     assert cot.find("mission").attrs["type"] == "REMOVE_CONTENT"
     assert cot.find("MissionChange").find("contentUid").text == "shape-1"
     assert cot.find("MissionChange").find("creatorUid").text == SENDER_UID
+    # CloudTAK (node-cot) odrzuca zmianę z dwoma elementami details
+    assert len(cot.find("MissionChange").find_all("details")) == 1
 
 
 def test_forced_delete_leaves_object_in_another_mission(shared_app, controller):

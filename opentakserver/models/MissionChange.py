@@ -175,7 +175,8 @@ def generate_mission_change_cot(
             )
         # SubElement(mission_change_element, "contentUid").text = cot_event.attrs['uid']
 
-    if mission_uid:
+    # Jeden element details: CloudTAK (node-cot) odrzuca całą zmianę, gdy jest ich dwa
+    if mission_uid and not cot_event:
         details_tag = SubElement(mission_change_element, "details")
         if mission_uid.color:
             details_tag.set("color", str(mission_uid.color))
