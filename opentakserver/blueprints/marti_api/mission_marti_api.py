@@ -1390,6 +1390,9 @@ def mission_subscribe(mission_name: str = None, mission_guid: str = None):
         )
 
     mission = mission[0]
+    # Trasa po GUID nie dostaje nazwy misji, a od niej zależą wiersz MissionRole,
+    # klucz powiązania missions.<nazwa> i usuwanie zaproszeń
+    mission_name = mission.name
     group_filters = []
     groups = db.session.execute(db.session.query(GroupUser).filter_by(user_id=user.id)).scalars()
     for group in groups:
