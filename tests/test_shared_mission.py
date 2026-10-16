@@ -397,6 +397,20 @@ def test_forced_delete_without_sender_does_nothing(shared_app, controller):
     assert change_cots(controller) == []
 
 
+def test_forced_delete_from_federation_account_does_nothing(shared_app, controller):
+    # Partnerzy z federacji mają mniejsze zaufanie niż użytkownicy lokalni
+    deliver(controller, make_xml("shape-1", "u-d-f"))
+    changes_before = mission_changes(shared_app)
+    controller.rabbit_channel.published.clear()
+    user_id = make_user(shared_app, "fed_partner")
+
+    deliver(controller, delete_xml("shape-1"), user_id=user_id)
+
+    assert mission_uids(shared_app) == {"shape-1": SHARED}
+    assert mission_changes(shared_app) == changes_before
+    assert mission_publications(controller) == []
+
+
 def test_delete_without_forcedelete_does_nothing(shared_app, controller):
     deliver(controller, make_xml("shape-1", "u-d-f"))
     controller.rabbit_channel.published.clear()

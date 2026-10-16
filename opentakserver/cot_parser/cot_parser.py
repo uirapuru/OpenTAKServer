@@ -1153,9 +1153,7 @@ class CoTController:
     def shared_mission_name(self) -> str:
         return self.context.app.config.get("OTS_SHARED_MISSION") or ""
 
-    def share_to_mission(
-        self, event: BeautifulSoup, sender_uid: str, user_id: int | None = None
-    ) -> None:
+    def share_to_mission(self, event: BeautifulSoup, sender_uid: str) -> None:
         """Dopisuje rozgłoszony obiekt do misji wspólnej.
 
         Jako twórca zmiany idzie uid urządzenia nadawcy: ATAK zdejmuje oczekującą publikację
@@ -1163,10 +1161,6 @@ class CoTController:
         """
         mission_name = self.shared_mission_name()
         if not mission_name or not is_shareable(event, sender_uid):
-            return
-
-        # Obiekty z kont technicznych federacji nie trafiają na mapę wspólną
-        if self.get_username(user_id).startswith(FEDERATION_USERNAME_PREFIX):
             return
 
         with self.context:
@@ -1265,11 +1259,16 @@ class CoTController:
             return
 
         try:
+            # Konta techniczne federacji ani nie dopisują, ani nie zdejmują z mapy wspólnej:
+            # partnerzy mają mniejsze zaufanie niż użytkownicy lokalni
+            if self.get_username(user_id).startswith(FEDERATION_USERNAME_PREFIX):
+                return
+
             target_uid = forced_delete_target(event)
             if target_uid:
                 self.remove_from_mission(target_uid, sender_uid)
             elif event.attrs.get("type") != "t-x-d-d":
-                self.share_to_mission(event, sender_uid, user_id)
+                self.share_to_mission(event, sender_uid)
         except Exception as e:
             self.logger.error(f"Shared mission update failed: {e}")
             self.logger.debug(traceback.format_exc())
