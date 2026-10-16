@@ -116,7 +116,11 @@ class EudHandler(socketserver.BaseRequestHandler):
             if len(cot_list) < 2:
                 continue
 
-            for c in cot_list:
+            # The last element is whatever follows the last closing tag: the
+            # beginning of the next event (or nothing). Keep it for the next
+            # recv() instead of dropping it with the whole buffer.
+            *complete, rest = cot_list
+            for c in complete:
                 try:
                     if "<event" in c:
                         fromstring(c + "</event>")
@@ -125,11 +129,11 @@ class EudHandler(socketserver.BaseRequestHandler):
                         fromstring(c + "</auth>")
                         self.handle_auth(c + "</auth>")
                 except ParseError as e:
+                    # One malformed event must not take the following ones with it
                     self.logger.error(f"Failed to parse: {e}")
-                    cot = c
-                    break
 
-            cot = ""
+            # Whitespace between events would otherwise pile up forever
+            cot = rest if rest.strip() else ""
 
         self.close_connection()
 

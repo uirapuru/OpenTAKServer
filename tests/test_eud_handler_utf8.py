@@ -70,3 +70,39 @@ def test_one_byte_per_chunk():
     chunks = [bytes([b]) for b in COT.encode("utf-8")]
 
     assert run_handler(EudHandler, chunks) == [COT]
+
+
+EVENT_2 = (
+    '<event version="2.0" uid="GeoChat.ai_buddy.ANDROID-1.x" type="b-t-f" how="h-g-i-g-o">'
+    '<point lat="0" lon="0" hae="0" ce="9999999" le="9999999"/>'
+    "<detail><remarks>ai-buddy zmienił Twoją trasę</remarks></detail></event>"
+)
+
+
+def test_partial_event_after_complete_one_is_kept_for_next_recv():
+    data = (COT + EVENT_2).encode("utf-8")
+    cut = len(COT.encode("utf-8")) + 40
+    chunks = [data[:cut], data[cut:]]
+
+    assert run_handler(EudHandler, chunks) == [COT, EVENT_2]
+
+
+def test_partial_event_split_inside_polish_character():
+    data = (COT + EVENT_2).encode("utf-8")
+    cut = data.rindex("ł".encode("utf-8")) + 1
+    chunks = [data[:cut], data[cut:]]
+
+    assert run_handler(EudHandlerSSL, chunks) == [COT, EVENT_2]
+
+
+def test_malformed_event_does_not_drop_the_next_one():
+    broken = '<event version="2.0" uid="bad"><point lat="0" <<detail></event>'
+    chunks = [(broken + EVENT_2).encode("utf-8")]
+
+    assert run_handler(EudHandler, chunks) == [EVENT_2]
+
+
+def test_whitespace_between_events_does_not_accumulate():
+    handler_chunks = [(COT + "\n  ").encode("utf-8"), ("\n" + EVENT_2).encode("utf-8")]
+
+    assert run_handler(EudHandler, handler_chunks) == [COT, "\n" + EVENT_2]
