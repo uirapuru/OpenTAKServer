@@ -106,3 +106,26 @@ def test_subscribe_by_name_unchanged(subscriber, client, channel):
     assert response.status_code == 201
     assert roles(subscriber) == [(CLIENT_UID, MISSION)]
     assert (CLIENT_UID, "missions", f"missions.{MISSION}") in channel.bindings
+
+
+def test_subscribe_by_guid_with_mission_token(subscriber, client, channel, monkeypatch):
+    """Ponowna subskrypcja z tokenem misji po GUID zawsze kończyła się 400:
+    token porównywano z nazwą misji równą None."""
+    mission_marti_api = importlib.import_module(
+        "opentakserver.blueprints.marti_api.mission_marti_api"
+    )
+    monkeypatch.setattr(
+        mission_marti_api,
+        "verify_token",
+        lambda: {"MISSION_NAME": MISSION, "MISSION_GUID": GUID, "sub": CLIENT_UID},
+    )
+
+    response = client.put(
+        f"/Marti/api/missions/guid/{GUID}/subscription",
+        headers={"Authorization": "Bearer token"},
+    )
+
+    assert response.status_code == 201
+    assert response.get_json()["data"]["clientUid"] == CLIENT_UID
+    assert roles(subscriber) == [(CLIENT_UID, MISSION)]
+    assert (CLIENT_UID, "missions", f"missions.{MISSION}") in channel.bindings

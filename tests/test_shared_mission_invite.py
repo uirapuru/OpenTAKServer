@@ -280,3 +280,44 @@ def test_http_invite_route_unchanged(shared_app, client, channel, monkeypatch):
     assert [m["routing_key"] for m in channel.published] == [DEVICE_UID]
     event = fromstring(channel.published[0]["body"]["cot"])
     assert event.find("detail/mission").get("authorUid") == "ADMIN"
+
+
+@pytest.fixture
+def dispose_spy(shared_app, monkeypatch):
+    """Liczy wywołania db.engine.dispose() i stan puli po nich."""
+    from opentakserver.extensions import db
+
+    with shared_app.app_context():
+        engine = db.engine
+    calls = []
+    original = engine.dispose
+
+    def spy(*args, **kwargs):
+        original(*args, **kwargs)
+        calls.append(engine.pool.checkedout())
+
+    monkeypatch.setattr(engine, "dispose", spy)
+    return calls
+
+
+def test_pool_disposed_when_invited(shared_app, channel, dispose_spy):
+    assert make_handler(shared_app).maybe_invite_shared_mission() is True
+    assert dispose_spy == [0]
+
+
+def test_pool_disposed_when_role_exists(shared_app, channel, dispose_spy):
+    add_role(shared_app)
+    assert make_handler(shared_app).maybe_invite_shared_mission() is False
+    assert dispose_spy == [0]
+
+
+def test_pool_disposed_and_no_raise_when_publish_fails(shared_app, monkeypatch, dispose_spy):
+    def broken(*args, **kwargs):
+        raise pika.exceptions.AMQPConnectionError("down")
+
+    monkeypatch.setattr(pika, "BlockingConnection", broken)
+
+    assert make_handler(shared_app).maybe_invite_shared_mission() is False
+    assert dispose_spy == [0]
+    # Nieudana próba nie blokuje ponownej na 10 minut
+    assert eud_handler_module._shared_invites == {}

@@ -479,7 +479,10 @@ class EudHandler(socketserver.BaseRequestHandler):
         elif event and self.uid and not self.shared_invite_checked:
             # Dopiero przy zdarzeniu po identyfikacji: parse_device_info wiąże
             # kolejkę urządzenia z wymianą dms asynchronicznie, a t-x-m-i
-            # opublikowane przed powiązaniem przepadłoby
+            # opublikowane przed powiązaniem przepadłoby. Gdyby mimo to nie
+            # trafiło (brak powiązania), wiersz zaproszenia zostaje w bazie i ATAK
+            # odbierze je przy następnym połączeniu przez
+            # GET /Marti/api/missions/invitations?clientUid=
             self.shared_invite_checked = True
             self.maybe_invite_shared_mission()
 
@@ -504,22 +507,27 @@ class EudHandler(socketserver.BaseRequestHandler):
             if last is not None and now - last < SHARED_INVITE_INTERVAL:
                 return False
 
+        invited = False
         try:
             from opentakserver.blueprints.marti_api.mission_marti_api import invite_to_mission
 
             with self.app.app_context():
-                role = db.session.execute(
-                    select(MissionRole.id).filter_by(mission_name=mission_name, clientUid=uid)
-                ).first()
-                invitation = db.session.execute(
-                    select(MissionInvitation.id).filter_by(
-                        mission_name=mission_name, client_uid=uid
-                    )
-                ).first()
-                invited = False
-                if not role and not invitation:
-                    invited = invite_to_mission(mission_name, uid, SHARED_INVITER)
-                db.session.close()
+                try:
+                    role = db.session.execute(
+                        select(MissionRole.id).filter_by(mission_name=mission_name, clientUid=uid)
+                    ).first()
+                    invitation = db.session.execute(
+                        select(MissionInvitation.id).filter_by(
+                            mission_name=mission_name, client_uid=uid
+                        )
+                    ).first()
+                    if not role and not invitation:
+                        invited = invite_to_mission(mission_name, uid, SHARED_INVITER)
+                finally:
+                    # Jak w handle_cot po identyfikacji: połączenie z bazą nie
+                    # może wisieć przez całą sesję urządzenia
+                    db.session.close()
+                    db.engine.dispose()
         except BaseException as e:
             self.logger.error(f"Failed to invite {uid} to {mission_name}: {e}")
             self.logger.debug(traceback.format_exc())
