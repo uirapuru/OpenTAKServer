@@ -16,10 +16,10 @@ import sqlalchemy.exc
 from bs4 import BeautifulSoup
 from flask import Blueprint, Response
 from flask import current_app as app
-from flask import jsonify, request
+from flask import has_request_context, jsonify, request
 from flask_babel import gettext
 from flask_security import current_user, hash_password, verify_password
-from sqlalchemy import insert, or_, update
+from sqlalchemy import insert, or_, select, update
 from werkzeug.utils import secure_filename
 
 from opentakserver.blueprints.marti_api.data_package_marti_api import save_data_package_file
@@ -155,7 +155,13 @@ def generate_token(mission: Mission, eud_uid: str):
         "jti": str(uuid.uuid4()),
         "iat": int(time.time()),
         "sub": eud_uid,
-        "iss": urlparse(request.base_url).hostname,
+        # Poza żądaniem HTTP (zaproszenie przy połączeniu z EudHandler) nie ma
+        # adresu żądania; OTS przy sprawdzaniu tokenu nie weryfikuje wystawcy
+        "iss": (
+            urlparse(request.base_url).hostname
+            if has_request_context()
+            else app.config.get("OTS_NODE_ID")
+        ),
         "MISSION_NAME": mission.name,
         "MISSION_GUID": mission.guid,
     }
@@ -208,7 +214,11 @@ def generate_new_mission_cot(mission: Mission) -> Element:
 
 
 def generate_invitation_cot(
-    mission: Mission, uid: str, cot_type: str = "t-x-m-i", delete: bool = False
+    mission: Mission,
+    uid: str,
+    cot_type: str = "t-x-m-i",
+    delete: bool = False,
+    author_uid: str | None = None,
 ) -> Element:
     """
     Generates an invitation (t-x-m-i) or role change (t-x-m-r) cot
@@ -216,6 +226,7 @@ def generate_invitation_cot(
     :param uid:
     :param cot_type:
     :param delete:
+    :param author_uid: shown by ATAK as "based on invite from"; defaults to the mission creator
     :return:
     """
 
@@ -246,7 +257,7 @@ def generate_invitation_cot(
             "tool": mission.tool,
             "name": mission.name,
             "guid": mission.guid,
-            "authorUid": mission.creator_uid,
+            "authorUid": author_uid or mission.creator_uid,
             "token": generate_token(mission, uid),
         },
     )
@@ -915,7 +926,14 @@ def invite(mission_name: str, invitation_type: str, invitee: str):
     db.session.add(invitation)
     db.session.commit()
 
-    event = generate_invitation_cot(mission, invitee)
+    publish_invitation(mission, invitee)
+
+    return "", 200
+
+
+def publish_invitation(mission: Mission, invitee: str, author_uid: str | None = None) -> None:
+    """Send the t-x-m-i to the invitee through the dms exchange."""
+    event = generate_invitation_cot(mission, invitee, author_uid=author_uid)
     rabbit_credentials = pika.PlainCredentials(
         app.config.get("OTS_RABBITMQ_USERNAME"), app.config.get("OTS_RABBITMQ_PASSWORD")
     )
@@ -934,7 +952,37 @@ def invite(mission_name: str, invitation_type: str, invitee: str):
     channel.close()
     rabbit_connection.close()
 
-    return "", 200
+
+def invite_to_mission(mission_name: str, client_uid: str, inviter: str) -> bool:
+    """Invite one device (by UID) to a mission without an HTTP request.
+
+    Needs only an application context. Writes the invitation row, which ATAK
+    also reads on every connect (GET /Marti/api/missions/invitations), and
+    sends the t-x-m-i the same way PUT .../invite/clientUid/<uid> does.
+    inviter lands in the row's creator_uid and in the CoT's authorUid, which
+    ATAK shows as "based on invite from: <inviter>".
+    """
+    mission = db.session.execute(select(Mission).filter_by(name=mission_name)).scalar_one_or_none()
+    if not mission:
+        logger.error(f"Cannot invite {client_uid}: mission {mission_name} not found")
+        return False
+
+    eud = db.session.execute(select(EUD).filter_by(uid=client_uid)).scalar_one_or_none()
+    if not eud:
+        logger.error(f"Cannot invite {client_uid} to {mission_name}: no such EUD")
+        return False
+
+    invitation = MissionInvitation()
+    invitation.mission_name = mission_name
+    invitation.client_uid = client_uid
+    invitation.type = InvitationTypeEnum.clientUid
+    invitation.creator_uid = inviter
+    invitation.role = mission.default_role
+    db.session.add(invitation)
+    db.session.commit()
+
+    publish_invitation(mission, client_uid, author_uid=inviter)
+    return True
 
 
 @mission_marti_api.route(

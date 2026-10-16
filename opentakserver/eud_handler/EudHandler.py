@@ -9,6 +9,8 @@ import random
 import re
 import socketserver
 import sys
+import threading
+import time
 import traceback
 import uuid
 from logging.handlers import TimedRotatingFileHandler
@@ -56,6 +58,7 @@ from opentakserver.models.MissionChange import MissionChange
 from opentakserver.models.MissionContentMission import MissionContentMission
 from opentakserver.models.MissionInvitation import MissionInvitation
 from opentakserver.models.MissionLogEntry import MissionLogEntry
+from opentakserver.models.MissionRole import MissionRole
 from opentakserver.models.MissionUID import MissionUID
 from opentakserver.models.Point import Point
 from opentakserver.models.RBLine import RBLine
@@ -64,6 +67,17 @@ from opentakserver.models.VideoRecording import VideoRecording
 from opentakserver.models.VideoStream import VideoStream
 from opentakserver.models.WebAuthn import WebAuthn
 from opentakserver.models.ZMIST import ZMIST
+
+# Zaproszenie do misji wspólnej: najwyżej raz na 10 minut na urządzenie.
+# Pamięć procesu; EudServer forkuje proces na połączenie, więc między
+# połączeniami ponownym zaproszeniom zapobiega wiersz w mission_invitations.
+SHARED_INVITE_INTERVAL = 600
+# ATAK pokazuje to jako „based on invite from: …”
+SHARED_INVITER = "Mapa wspólna"
+# Połączenie serwerowe CloudTAK subskrybuje misję samo
+SHARED_INVITE_SKIP_PREFIX = "ANDROID-CloudTAK-"
+_shared_invites: dict[str, float] = {}
+_shared_invites_lock = threading.Lock()
 
 
 class EudHandler(socketserver.BaseRequestHandler):
@@ -87,6 +101,7 @@ class EudHandler(socketserver.BaseRequestHandler):
     bound_queues = []
     phone_number = None
     group_memberships = []
+    shared_invite_checked = False
 
     def __init__(self, request: socket, client_address, server):
         super().__init__(request, client_address, server)
@@ -461,8 +476,60 @@ class EudHandler(socketserver.BaseRequestHandler):
             with self.app.app_context():
                 db.session.close()
                 db.engine.dispose()
+        elif event and self.uid and not self.shared_invite_checked:
+            # Dopiero przy zdarzeniu po identyfikacji: parse_device_info wiąże
+            # kolejkę urządzenia z wymianą dms asynchronicznie, a t-x-m-i
+            # opublikowane przed powiązaniem przepadłoby
+            self.shared_invite_checked = True
+            self.maybe_invite_shared_mission()
 
         self.publish_cot(event)
+
+    def maybe_invite_shared_mission(self) -> bool:
+        """Invite this device to the shared mission (OTS_SHARED_MISSION).
+
+        Skips when the feature is off, for CloudTAK's server-side connection,
+        within 10 minutes of the last invitation, when the device already has a
+        mission_roles row for the mission, and when an invitation row exists
+        (pending or blocked by the user in ATAK).
+        """
+        mission_name = self.app.config.get("OTS_SHARED_MISSION")
+        uid = self.uid
+        if not mission_name or not uid or uid.startswith(SHARED_INVITE_SKIP_PREFIX):
+            return False
+
+        now = time.monotonic()
+        with _shared_invites_lock:
+            last = _shared_invites.get(uid)
+            if last is not None and now - last < SHARED_INVITE_INTERVAL:
+                return False
+
+        try:
+            from opentakserver.blueprints.marti_api.mission_marti_api import invite_to_mission
+
+            with self.app.app_context():
+                role = db.session.execute(
+                    select(MissionRole.id).filter_by(mission_name=mission_name, clientUid=uid)
+                ).first()
+                invitation = db.session.execute(
+                    select(MissionInvitation.id).filter_by(
+                        mission_name=mission_name, client_uid=uid
+                    )
+                ).first()
+                invited = False
+                if not role and not invitation:
+                    invited = invite_to_mission(mission_name, uid, SHARED_INVITER)
+                db.session.close()
+        except BaseException as e:
+            self.logger.error(f"Failed to invite {uid} to {mission_name}: {e}")
+            self.logger.debug(traceback.format_exc())
+            return False
+
+        if invited:
+            self.logger.info(f"Invited {uid} to shared mission {mission_name}")
+            with _shared_invites_lock:
+                _shared_invites[uid] = now
+        return invited
 
     def publish_cot(self, event):
         if not event:
