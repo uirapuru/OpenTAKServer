@@ -29,6 +29,7 @@ from pika.channel import Channel
 from sqlalchemy import exc, insert, select, update
 
 from opentakserver.cot_parser.tdd import is_self_delete
+from opentakserver.cot_parser.shared_mission import forced_delete_target, is_broadcast, is_shareable
 from opentakserver.defaultconfig import DefaultConfig
 from opentakserver.extensions import db, logger
 from opentakserver.functions import *
@@ -1144,6 +1145,107 @@ class CoTController:
             ),
         )
 
+    def shared_mission_name(self) -> str:
+        return self.context.app.config.get("OTS_SHARED_MISSION") or ""
+
+    def share_to_mission(self, uid: str, event: BeautifulSoup, sender_uid: str) -> None:
+        """Dopisuje rozgłoszony obiekt do misji wspólnej.
+
+        Jako twórca zmiany idzie uid urządzenia nadawcy: ATAK zdejmuje oczekującą publikację
+        dopiero po t-x-m-c z contentUid obiektu i creatorUid równym własnemu uid.
+        """
+        mission_name = self.shared_mission_name()
+        if not mission_name or not is_shareable(event, sender_uid):
+            return
+
+        with self.context:
+            mission = db.session.execute(select(Mission).filter_by(name=mission_name)).scalar()
+            if not mission:
+                self.logger.error(f"No such shared mission found: {mission_name}")
+                return
+
+            self.add_to_mission(mission, sender_uid, event)
+
+    def remove_from_mission(self, target_uid: str, creator_uid: str | None = None) -> None:
+        """Zdejmuje obiekt z misji, w której jest, jak DELETE /Marti/api/missions/<n>/contents?uid=.
+
+        Zapisuje MissionChange(REMOVE_CONTENT), czyści MissionUID.mission_name
+        i CoT.mission_name, wysyła t-x-m-c do subskrybentów tej misji.
+        """
+        with self.context:
+            mission_uid = db.session.get(MissionUID, target_uid)
+            if not mission_uid or not mission_uid.mission_name:
+                return
+
+            mission_name = mission_uid.mission_name
+            mission = db.session.execute(select(Mission).filter_by(name=mission_name)).scalar()
+            if not mission:
+                self.logger.error(f"No such mission found: {mission_name}")
+                return
+
+            now = datetime.now(timezone.utc)
+            mission_change = MissionChange()
+            mission_change.isFederatedChange = False
+            mission_change.change_type = MissionChange.REMOVE_CONTENT
+            mission_change.mission_name = mission_name
+            mission_change.timestamp = now
+            mission_change.creator_uid = creator_uid or self.context.app.config.get("OTS_NODE_ID")
+            mission_change.server_time = now
+            mission_change.mission_uid = target_uid
+
+            mission_uid.mission_name = None
+
+            cot_event = None
+            cot_rows = db.session.execute(
+                select(CoT).filter_by(uid=target_uid, mission_name=mission_name)
+            ).scalars().all()
+            for cot_row in cot_rows:
+                cot_row.mission_name = None
+            latest = db.session.execute(
+                select(CoT).filter_by(uid=target_uid).order_by(CoT.id.desc())
+            ).scalar()
+            if latest:
+                cot_event = BeautifulSoup(latest.xml, "xml").find("event")
+
+            event = generate_mission_change_cot(
+                mission.name,
+                mission,
+                mission_change,
+                mission_uid=mission_uid,
+                cot_event=cot_event,
+            )
+
+            db.session.add(mission_change)
+            db.session.commit()
+
+            body = {
+                "uid": self.context.app.config.get("OTS_NODE_ID"),
+                "cot": tostring(event).decode("utf-8"),
+            }
+            self.rabbit_channel.basic_publish(
+                "missions",
+                routing_key=f"missions.{mission_name}",
+                body=json.dumps(body),
+                properties=pika.BasicProperties(
+                    expiration=self.context.app.config.get("OTS_RABBITMQ_TTL")
+                ),
+            )
+
+    def handle_shared_mission(self, event: BeautifulSoup, sender_uid: str | None) -> None:
+        # Tylko zdarzenia rozgłoszone; błąd misji nie może zatrzymać routingu zdarzenia
+        if not self.shared_mission_name() or not is_broadcast(event):
+            return
+
+        try:
+            target_uid = forced_delete_target(event)
+            if target_uid:
+                self.remove_from_mission(target_uid, sender_uid)
+            elif event.attrs.get("type") != "t-x-d-d":
+                self.share_to_mission(sender_uid, event, sender_uid)
+        except BaseException as e:
+            self.logger.error(f"Shared mission update failed: {e}")
+            self.logger.debug(traceback.format_exc())
+
     @staticmethod
     def update_mission_uid(event_uid: str, values: dict) -> None:
         db.session.execute(update(MissionUID).where(MissionUID.uid == event_uid).values(**values))
@@ -1309,6 +1411,7 @@ class CoTController:
                 self.parse_rbline(event, uid, point_pk, cot_pk)
                 self.parse_stats(event, uid)
                 self.generate_mission_change(uid, event)
+                self.handle_shared_mission(event, uid)
                 self.route_cot(event, uid, body.get("user_id"))
                 self.rabbit_channel.basic_ack(delivery_tag=basic_deliver.delivery_tag)
 

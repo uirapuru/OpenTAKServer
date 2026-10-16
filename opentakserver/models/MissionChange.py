@@ -157,16 +157,22 @@ def generate_mission_change_cot(
         callsign = cot_event.find("contact")
         icon = cot_event.find("usericon")
 
+        # Brakujący atrybut pomijamy: wyjątek po zapisie zmiany oznaczałby brak t-x-m-c
+        # i "Failed to publish" w ATAK
         if color and "argb" in color.attrs:
             details_tag.set("color", color.attrs["argb"])
         if color and "value" in color.attrs:
             details_tag.set("color", color.attrs["value"])
-        if callsign:
+        if callsign and callsign.attrs.get("callsign"):
             details_tag.set("callsign", callsign.attrs["callsign"])
-        if icon:
-            details_tag.set("iconsetPath", icon.attrs["iconsetpath"])
+        iconset_path = icon and (icon.attrs.get("iconsetpath") or icon.attrs.get("iconsetPath"))
+        if iconset_path:
+            details_tag.set("iconsetPath", iconset_path)
 
-        SubElement(details_tag, "location", {"lon": point.attrs["lon"], "lat": point.attrs["lat"]})
+        if point and "lat" in point.attrs and "lon" in point.attrs:
+            SubElement(
+                details_tag, "location", {"lon": point.attrs["lon"], "lat": point.attrs["lat"]}
+            )
         # SubElement(mission_change_element, "contentUid").text = cot_event.attrs['uid']
 
     if mission_uid:

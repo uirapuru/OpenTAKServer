@@ -102,6 +102,8 @@ def assert_raw_and_change(publications, event_uid):
     assert cot.find("mission").attrs["type"] == "ADD_CONTENT"
     assert cot.find("MissionChange").find("contentUid").text == event_uid
     assert cot.find("MissionChange").find("type").text == "ADD_CONTENT"
+    # ATAK zdejmuje oczekującą publikację tylko przy creatorUid równym własnemu uid
+    assert cot.find("MissionChange").find("creatorUid").text == SENDER_UID
 
 
 def test_first_add_records_change_and_publishes_twice(app, controller):

@@ -85,6 +85,8 @@ class DefaultConfig:
     OTS_NODE_ID = os.getenv(
         "OTS_NODE_ID", "".join(random.choices(string.ascii_lowercase + string.digits, k=32))
     )
+    # Nazwa misji wspólnej, do której trafiają obiekty rozgłoszone. Pusta = funkcja wyłączona.
+    OTS_SHARED_MISSION = os.getenv("OTS_SHARED_MISSION", "")
 
     # Certificate Authority Settings
     OTS_CA_NAME = os.getenv("OTS_CA_NAME", "OpenTAKServer-CA")
