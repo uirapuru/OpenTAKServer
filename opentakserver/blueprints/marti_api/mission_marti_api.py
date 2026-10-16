@@ -26,6 +26,7 @@ from werkzeug.utils import secure_filename
 
 from opentakserver.blueprints.marti_api.data_package_marti_api import save_data_package_file
 from opentakserver.blueprints.marti_api.marti_api import verify_client_cert
+from opentakserver.cot_parser.shared_mission import FEDERATION_USERNAME_PREFIX
 from opentakserver.extensions import db, logger
 from opentakserver.functions import datetime_from_iso8601_string, iso8601_string_from_datetime
 from opentakserver.models.CoT import CoT
@@ -2310,6 +2311,19 @@ def add_content(mission_name):
     if not token or token.get("MISSION_NAME") != mission_name:
         return jsonify({"success": False, "error": gettext("Missing or invalid token")}), 401
 
+    # Nadawca musi być znany z certyfikatu klienta, a token misji należeć do jego urządzenia
+    user = mission_package_user()
+    if not user:
+        return jsonify({"success": False, "error": gettext("Missing client certificate")}), 401
+    if (user.username or "").startswith(FEDERATION_USERNAME_PREFIX):
+        return jsonify({"success": False, "error": gettext("Forbidden")}), 403
+    sender_uid = token.get("sub")
+    eud = (
+        db.session.execute(select(EUD).filter_by(uid=sender_uid)).scalar() if sender_uid else None
+    )
+    if not eud or eud.user_id != user.id:
+        return jsonify({"success": False, "error": gettext("Forbidden")}), 403
+
     mission = db.session.execute(select(Mission).filter_by(name=mission_name)).scalar()
     if not mission:
         return (
@@ -2324,6 +2338,9 @@ def add_content(mission_name):
             404,
         )
 
+    if request.content_length and request.content_length > MISSION_PACKAGE_MAX_BYTES:
+        return jsonify({"success": False, "error": "Mission package too large"}), 413
+
     try:
         events = read_mission_package_events(request.get_data(cache=False))
     except ValueError as e:
@@ -2332,10 +2349,7 @@ def add_content(mission_name):
     for event in events:
         set_mission_destination(event, mission.name)
 
-    sender_uid = (
-        token.get("sub") or request.args.get("creatorUid") or request.args.get("clientUid")
-    )
-    user_id = mission_package_user_id()
+    user_id = user.id
 
     rabbit_credentials = pika.PlainCredentials(
         app.config.get("OTS_RABBITMQ_USERNAME"), app.config.get("OTS_RABBITMQ_PASSWORD")
@@ -2372,6 +2386,7 @@ def add_content(mission_name):
 # Limit rozpakowanej treści paczki z CoT; chroni przed bombą zip
 MISSION_PACKAGE_MAX_BYTES = 10 * 1024 * 1024
 MISSION_PACKAGE_COT_SUFFIXES = (".cot", ".xml")
+MISSION_PACKAGE_MAX_EVENTS = 500
 
 
 def read_mission_package_events(data: bytes) -> list:
@@ -2414,36 +2429,40 @@ def read_mission_package_events(data: bytes) -> list:
             event = BeautifulSoup(content, "xml").find("event")
             if event is not None and event.attrs.get("uid"):
                 events.append(event)
+                if len(events) > MISSION_PACKAGE_MAX_EVENTS:
+                    raise ValueError("Too many events in mission package")
 
     return events
 
 
 def set_mission_destination(event, mission_name: str) -> None:
-    """Zostawia w zdarzeniu dokładnie jeden <dest mission="<nazwa>"/>."""
+    """Zostawia w zdarzeniu jedyny adres: <marti><dest mission="<nazwa>"/></marti>.
+
+    Wszystkie inne <marti> i <dest> (callsign, uid, inne misje) znikają, żeby paczka
+    do misji nie służyła do wysyłania wiadomości wprost do osób.
+    """
+    for marti in event.find_all("marti"):
+        marti.decompose()
     for destination in event.find_all("dest"):
-        if "mission" in destination.attrs:
-            destination.decompose()
+        destination.decompose()
 
     soup = BeautifulSoup("", "xml")
     detail = event.find("detail", recursive=False)
     if detail is None:
         detail = soup.new_tag("detail")
         event.append(detail)
-    marti = detail.find("marti", recursive=False)
-    if marti is None:
-        marti = soup.new_tag("marti")
-        detail.append(marti)
+    marti = soup.new_tag("marti")
     marti.append(soup.new_tag("dest", attrs={"mission": mission_name}))
+    detail.append(marti)
 
 
-def mission_package_user_id() -> int | None:
-    # Konto z certyfikatu klienta; bez niego CoT idzie jak od połączenia anonimowego
+def mission_package_user() -> User | None:
+    # Konto z certyfikatu klienta przekazanego przez nginx
     try:
         cert = verify_client_cert()
         if not cert:
             return None
-        user = app.security.datastore.find_user(username=cert.get_subject().commonName)
-        return user.id if user else None
+        return app.security.datastore.find_user(username=cert.get_subject().commonName)
     except Exception as e:
         logger.warning(f"Failed to identify the mission package sender: {e}")
         return None

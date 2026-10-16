@@ -610,3 +610,20 @@ def test_transient_track_stays_out_of_mission(shared_app, controller):
     deliver(controller, timed_xml("uas-1", "2026-10-16T10:00:00Z", "2026-10-16T10:00:20Z"))
 
     assert mission_uids(shared_app) == {}
+
+
+def test_federation_account_cannot_write_to_shared_mission_by_dest(shared_app, controller):
+    user_id = make_user(shared_app, "fed_partner")
+
+    deliver(controller, marker_xml("point-1", "Z federacji", TO_SHARED), user_id=user_id)
+
+    assert mission_uids(shared_app) == {}
+    assert mission_publications(controller) == []
+
+
+def test_federation_account_can_still_write_to_other_mission_by_dest(shared_app, controller):
+    user_id = make_user(shared_app, "fed_partner")
+
+    deliver(controller, marker_xml("point-9", "Z federacji", TO_OTHER), user_id=user_id)
+
+    assert mission_uids(shared_app) == {"point-9": OTHER}

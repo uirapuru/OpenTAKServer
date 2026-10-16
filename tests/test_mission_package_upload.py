@@ -60,18 +60,57 @@ def server_key(app, tmp_path):
     return key
 
 
-@pytest.fixture
-def mission_app(app, server_key):
+USERNAME = "cloudtak-user"
+
+
+def create_user(app, username):
+    from opentakserver.extensions import db
+
+    with app.app_context():
+        user = app.security.datastore.create_user(username=username, password="x")
+        db.session.commit()
+        return user.id
+
+
+def create_eud(app, uid, user_id):
     from opentakserver.extensions import db
     from opentakserver.models.EUD import EUD
-    from opentakserver.models.Mission import Mission
 
     with app.app_context():
         eud = EUD()
-        eud.uid = CLIENT_UID
-        eud.callsign = "cloudtak"
+        eud.uid = uid
+        eud.callsign = uid
+        eud.user_id = user_id
         db.session.add(eud)
         db.session.commit()
+
+
+@pytest.fixture
+def cert_user(monkeypatch):
+    """Nazwa użytkownika z certyfikatu klienta (nginx przekazuje go w nagłówku)."""
+    import importlib
+
+    module = importlib.import_module("opentakserver.blueprints.marti_api.mission_marti_api")
+    current = {"username": USERNAME}
+
+    def fake_cert():
+        if current["username"] is None:
+            return False
+        cert = MagicMock()
+        cert.get_subject.return_value.commonName = current["username"]
+        return cert
+
+    monkeypatch.setattr(module, "verify_client_cert", fake_cert)
+    return current
+
+
+@pytest.fixture
+def mission_app(app, server_key, cert_user):
+    from opentakserver.extensions import db
+    from opentakserver.models.Mission import Mission
+
+    create_eud(app, CLIENT_UID, create_user(app, USERNAME))
+    with app.app_context():
         mission = Mission()
         mission.name = MISSION
         mission.guid = GUID
@@ -102,7 +141,7 @@ def cot_xml(uid, callsign, detail=""):
 
 def make_package(files):
     buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(
             "MANIFEST/manifest.xml",
             '<MissionPackageManifest version="2"><Configuration/><Contents/>'
@@ -217,8 +256,10 @@ def test_package_over_the_size_limit_is_rejected(mission_app, channel, server_ke
     import importlib
 
     module = importlib.import_module("opentakserver.blueprints.marti_api.mission_marti_api")
-    monkeypatch.setattr(module, "MISSION_PACKAGE_MAX_BYTES", 1000)
-    body = make_package({"a1/point-1.cot": cot_xml("point-1", "x" * 2000)})
+    monkeypatch.setattr(module, "MISSION_PACKAGE_MAX_BYTES", 5000)
+    # Paczka mieści się w limicie, rozpakowana treść już nie (bomba zip)
+    body = make_package({"a1/point-1.cot": cot_xml("point-1", "x" * 50000)})
+    assert len(body) < 5000
 
     response = upload(
         mission_app.test_client(),
@@ -301,3 +342,135 @@ def test_delete_by_guid_without_token_is_401(mission_app, channel):
     )
 
     assert response.status_code == 401
+
+
+def auth_headers(server_key, **kwargs):
+    return {"MissionAuthorization": f"Bearer {token(server_key, **kwargs)}"}
+
+
+def test_package_cot_cannot_address_people_directly(mission_app, channel, server_key):
+    from opentakserver.cot_parser.cot_parser import CoTController
+    from opentakserver.extensions import db
+
+    detail = '<marti><dest callsign="X"/><dest uid="Y"/><dest mission="Inna"/></marti>'
+    body = make_package({"a1/point-1.cot": cot_xml("point-1", "Pierwszy", detail)})
+
+    response = upload(mission_app.test_client(), body, auth_headers(server_key))
+
+    assert response.status_code == 200
+    [message] = parser_messages(channel)
+    event = BeautifulSoup(message["body"]["cot"], "xml").find("event")
+    assert [d.attrs for d in event.find_all("dest")] == [{"mission": MISSION}]
+    assert len(event.find_all("marti")) == 1
+
+    parser = CoTController(mission_app.app_context(), MagicMock(), db, MagicMock())
+    parser.rabbit_channel = MagicMock()
+    parser.on_message(parser.rabbit_channel, MagicMock(), None, json.dumps(message["body"]))
+    calls = parser.rabbit_channel.basic_publish.call_args_list
+    exchanges = [c.kwargs.get("exchange") for c in calls]
+    assert "dms" not in exchanges
+
+
+def test_package_without_client_cert_is_rejected(mission_app, channel, server_key, cert_user):
+    cert_user["username"] = None
+    body = make_package({"a1/point-1.cot": cot_xml("point-1", "Pierwszy")})
+
+    response = upload(mission_app.test_client(), body, auth_headers(server_key))
+
+    assert response.status_code == 401
+    assert channel.published == []
+
+
+def test_package_with_cert_of_unknown_user_is_rejected(
+    mission_app, channel, server_key, cert_user
+):
+    cert_user["username"] = "nie-ma-takiego"
+    body = make_package({"a1/point-1.cot": cot_xml("point-1", "Pierwszy")})
+
+    response = upload(mission_app.test_client(), body, auth_headers(server_key))
+
+    assert response.status_code == 401
+    assert channel.published == []
+
+
+def test_token_of_another_users_device_is_rejected(mission_app, channel, server_key):
+    create_eud(mission_app, "ANDROID-other", create_user(mission_app, "inny"))
+    body = make_package({"a1/point-1.cot": cot_xml("point-1", "Pierwszy")})
+
+    response = upload(
+        mission_app.test_client(), body, auth_headers(server_key, sub="ANDROID-other")
+    )
+
+    assert response.status_code == 403
+    assert channel.published == []
+
+
+def test_token_of_unknown_device_is_rejected(mission_app, channel, server_key):
+    body = make_package({"a1/point-1.cot": cot_xml("point-1", "Pierwszy")})
+
+    response = upload(
+        mission_app.test_client(), body, auth_headers(server_key, sub="ANDROID-nobody")
+    )
+
+    assert response.status_code == 403
+    assert channel.published == []
+
+
+def test_package_publishes_cert_user_id(mission_app, channel, server_key):
+    from opentakserver.extensions import db
+    from opentakserver.models.EUD import EUD
+
+    body = make_package({"a1/point-1.cot": cot_xml("point-1", "Pierwszy")})
+
+    upload(mission_app.test_client(), body, auth_headers(server_key))
+
+    with mission_app.app_context():
+        user_id = db.session.query(EUD).filter_by(uid=CLIENT_UID).one().user_id
+    [message] = parser_messages(channel)
+    assert message["body"]["user_id"] == user_id
+
+
+def test_package_from_federation_account_is_rejected(
+    mission_app, channel, server_key, cert_user
+):
+    create_eud(mission_app, "ANDROID-fed", create_user(mission_app, "fed_partner"))
+    cert_user["username"] = "fed_partner"
+    body = make_package({"a1/point-1.cot": cot_xml("point-1", "Pierwszy")})
+
+    response = upload(mission_app.test_client(), body, auth_headers(server_key, sub="ANDROID-fed"))
+
+    assert response.status_code == 403
+    assert channel.published == []
+
+
+def test_package_with_too_many_events_is_rejected(mission_app, channel, server_key, monkeypatch):
+    import importlib
+
+    module = importlib.import_module("opentakserver.blueprints.marti_api.mission_marti_api")
+    monkeypatch.setattr(module, "MISSION_PACKAGE_MAX_EVENTS", 2)
+    body = make_package({f"a{i}/point-{i}.cot": cot_xml(f"point-{i}", "x") for i in range(3)})
+
+    response = upload(mission_app.test_client(), body, auth_headers(server_key))
+
+    assert response.status_code == 400
+    assert channel.published == []
+
+
+def test_max_events_default_is_500():
+    import importlib
+
+    module = importlib.import_module("opentakserver.blueprints.marti_api.mission_marti_api")
+    assert module.MISSION_PACKAGE_MAX_EVENTS == 500
+
+
+def test_declared_body_over_limit_is_413(mission_app, channel, server_key, monkeypatch):
+    import importlib
+
+    module = importlib.import_module("opentakserver.blueprints.marti_api.mission_marti_api")
+    monkeypatch.setattr(module, "MISSION_PACKAGE_MAX_BYTES", 100)
+    body = make_package({"a1/point-1.cot": cot_xml("point-1", "Pierwszy")})
+
+    response = upload(mission_app.test_client(), body, auth_headers(server_key))
+
+    assert response.status_code == 413
+    assert channel.published == []

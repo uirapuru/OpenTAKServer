@@ -1042,9 +1042,14 @@ class CoTController:
                 )
                 db.session.commit()
 
-    def generate_mission_change(self, uid: str, event: BeautifulSoup):
+    def generate_mission_change(self, uid: str, event: BeautifulSoup, user_id: int | None = None):
         for destination in event.find_all("dest"):
             if "mission" not in destination.attrs:
+                continue
+
+            # Konto federacji nie pisze do misji wspólnej także przez <dest mission>
+            if self.is_federation_write_to_shared(destination.attrs["mission"], user_id):
+                self.logger.info(f"Federation account {user_id} cannot write to the shared mission")
                 continue
 
             with self.context:
@@ -1057,6 +1062,12 @@ class CoTController:
                     continue
 
                 self.add_to_mission(mission, uid, event)
+
+    def is_federation_write_to_shared(self, mission_name: str, user_id: int | None) -> bool:
+        shared_name = self.shared_mission_name()
+        if not shared_name or mission_name != shared_name or not user_id:
+            return False
+        return self.get_username(user_id).startswith(FEDERATION_USERNAME_PREFIX)
 
     @staticmethod
     def mission_uid_values(event: BeautifulSoup) -> dict:
@@ -1469,7 +1480,7 @@ class CoTController:
                 self.parse_marker(event, uid, point_pk, cot_pk)
                 self.parse_rbline(event, uid, point_pk, cot_pk)
                 self.parse_stats(event, uid)
-                self.generate_mission_change(uid, event)
+                self.generate_mission_change(uid, event, body.get("user_id"))
                 self.handle_shared_mission(event, uid, body.get("user_id"))
                 self.route_cot(event, uid, body.get("user_id"))
                 self.rabbit_channel.basic_ack(delivery_tag=basic_deliver.delivery_tag)
