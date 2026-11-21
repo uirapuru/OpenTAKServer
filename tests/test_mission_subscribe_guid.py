@@ -129,3 +129,33 @@ def test_subscribe_by_guid_with_mission_token(subscriber, client, channel, monke
     assert response.get_json()["data"]["clientUid"] == CLIENT_UID
     assert roles(subscriber) == [(CLIENT_UID, MISSION)]
     assert (CLIENT_UID, "missions", f"missions.{MISSION}") in channel.bindings
+
+
+def test_resubscribe_with_cloudtak_mission_authorization_header(subscriber, client, channel, monkeypatch):
+    """CloudTAK odnawia subskrypcję z tokenem w MissionAuthorization; OTS szukał go
+    tylko w Authorization i żądał hasła (poligon26, 21 XI 2026)."""
+    from flask_security import hash_password
+    from opentakserver.extensions import db
+    from opentakserver.models.Mission import Mission
+
+    mission_marti_api = importlib.import_module(
+        "opentakserver.blueprints.marti_api.mission_marti_api"
+    )
+    monkeypatch.setattr(
+        mission_marti_api,
+        "verify_token",
+        lambda: {"MISSION_NAME": MISSION, "MISSION_GUID": GUID, "sub": CLIENT_UID},
+    )
+    with subscriber.app_context():
+        mission = db.session.execute(db.select(Mission).filter_by(name=MISSION)).scalar_one()
+        mission.password = hash_password("tajne")
+        mission.password_protected = True
+        db.session.commit()
+
+    response = client.put(
+        f"/Marti/api/missions/guid/{GUID}/subscription?uid={CLIENT_UID}",
+        headers={"MissionAuthorization": "Bearer token"},
+    )
+
+    assert response.status_code == 201
+    assert (CLIENT_UID, "missions", f"missions.{MISSION}") in channel.bindings

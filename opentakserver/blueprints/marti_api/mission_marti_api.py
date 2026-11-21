@@ -1523,13 +1523,19 @@ def mission_subscribe(mission_name: str = None, mission_guid: str = None):
         "nodeId": app.config.get("OTS_NODE_ID"),
     }
 
-    # And EUD will send a token if it has previously subscribed to the mission
-    if "Authorization" in request.headers:
+    # And EUD will send a token if it has previously subscribed to the mission.
+    # ATAK wysyła token w Authorization, CloudTAK (node-tak) w MissionAuthorization;
+    # bez tej drugiej CloudTAK po ponownym połączeniu dostawał „Invalid password”
+    # i tracił subskrypcję (poligon26, 21 XI 2026).
+    if "Authorization" in request.headers or "MissionAuthorization" in request.headers:
         token = verify_token()
         if not token or token["MISSION_NAME"] != mission_name:
             return jsonify({"success": False, "error": gettext("Invalid token")}), 400
 
-        eud = db.session.execute(db.session.query(EUD).filter_by(uid=token["sub"])).first()[0]
+        eud = db.session.execute(db.session.query(EUD).filter_by(uid=token["sub"])).first()
+        if not eud:
+            return jsonify({"success": False, "error": gettext("Invalid token")}), 400
+        eud = eud[0]
         uid = token["sub"]
         role = db.session.execute(
             db.session.query(MissionRole).filter_by(mission_name=mission_name, clientUid=uid)
@@ -1550,7 +1556,9 @@ def mission_subscribe(mission_name: str = None, mission_guid: str = None):
             role = role[0]
 
         response["data"] = {
-            "token": request.headers.get("Authorization").replace("Bearer ", ""),
+            "token": (
+                request.headers.get("Authorization") or request.headers.get("MissionAuthorization")
+            ).replace("Bearer ", ""),
             "clientUid": token["sub"],
             "username": role.username,
             "createTime": role.createTime,
