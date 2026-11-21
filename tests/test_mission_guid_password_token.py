@@ -67,3 +67,26 @@ def test_token_of_another_mission_is_refused(protected, client, monkeypatch):
     api = importlib.import_module("opentakserver.blueprints.marti_api.mission_marti_api")
     monkeypatch.setattr(api, "verify_token", lambda: {"sub": CLIENT_UID, "MISSION_NAME": "inna", "MISSION_GUID": "inny-guid"})
     assert client.get(f"/Marti/api/missions/guid/{GUID}").status_code == 401
+
+
+def test_layers_by_guid_is_an_empty_tak_list(protected, client):
+    response = client.get(f"/Marti/api/missions/guid/{GUID}/layers")
+    assert response.status_code == 200
+    assert response.get_json()["data"] == []
+
+
+def test_layers_by_name_is_json(protected, client):
+    assert client.get(f"/Marti/api/missions/{MISSION}/layers").get_json()["data"] == []
+
+
+def test_changes_by_guid_returns_changes(protected, client):
+    response = client.get(f"/Marti/api/missions/guid/{GUID}/changes")
+    assert response.status_code == 200
+    assert response.get_json()["type"] == "MissionChange"
+
+
+def test_guid_routes_refuse_protected_mission_without_token(protected, client, monkeypatch):
+    api = importlib.import_module("opentakserver.blueprints.marti_api.mission_marti_api")
+    monkeypatch.setattr(api, "verify_token", lambda: False)
+    assert client.get(f"/Marti/api/missions/guid/{GUID}/changes").status_code == 401
+    assert client.get(f"/Marti/api/missions/guid/{GUID}/layers").status_code == 401

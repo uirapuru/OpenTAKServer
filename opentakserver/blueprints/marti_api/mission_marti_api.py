@@ -2555,6 +2555,43 @@ def get_mission_cots(mission_name: str = None, mission_guid: str = None):
     )
 
 
+def _empty_layers():
+    # Warstw misji nie obsługujemy; pusty tekst psuł parsowanie JSON w CloudTAK
+    # („Failed to fetch mission layers”), więc oddajemy pustą listę w formacie TAK
+    return jsonify(
+        {"version": "3", "type": "MissionLayer", "data": [], "nodeId": app.config.get("OTS_NODE_ID")}
+    )
+
+
 @mission_marti_api.route("/Marti/api/missions/<mission_name>/layers")
 def get_mission_layers(mission_name: str):
-    return ""
+    return _empty_layers()
+
+
+def _mission_for_guid_route(mission_guid: str):
+    """Misja po GUID dla tras CloudTAK. Misja z hasłem wymaga tokenu tej misji."""
+    mission = db.session.execute(db.session.query(Mission).filter_by(guid=mission_guid)).first()
+    if not mission:
+        return None, (jsonify({"success": False, "error": f"Cannot find mission {mission_guid}"}), 404)
+    mission = mission[0]
+    if mission.password_protected and "iTAK" not in request.user_agent.string:
+        token = verify_token()
+        if not token or token.get("MISSION_GUID") != mission.guid:
+            return None, (jsonify({"success": False, "error": "Missing or invalid token"}), 401)
+    return mission, None
+
+
+@mission_marti_api.route("/Marti/api/missions/guid/<mission_guid>/layers")
+def get_mission_layers_by_guid(mission_guid: str):
+    mission, error = _mission_for_guid_route(mission_guid)
+    if error:
+        return error
+    return _empty_layers()
+
+
+@mission_marti_api.route("/Marti/api/missions/guid/<mission_guid>/changes", methods=["GET"])
+def mission_changes_by_guid(mission_guid: str):
+    mission, error = _mission_for_guid_route(mission_guid)
+    if error:
+        return error
+    return mission_changes(mission.name)
