@@ -346,15 +346,19 @@ def get_mission_by_guid(mission_guid: str):
         )
     mission = mission[0]
 
-    # check_permission już sprawdził token misji (albo certyfikat iTAK z rolą w misji),
-    # więc hasło sprawdzamy tylko, gdy klient je podał. CloudTAK po subskrypcji pyta
-    # o misję samym tokenem, bez hasła, i wcześniej dostawał tu 401.
-    if mission.password_protected and password and not verify_password(password, mission.password):
-        return jsonify({"success": False, "error": gettext("Invalid password")}), 401
+    # check_permission zwraca odmowę jako krotkę, nie Response, więc powyższy warunek
+    # nigdy jej nie przepuszcza dalej - nie można na nim polegać. Misję z hasłem
+    # wydajemy tylko z poprawnym hasłem albo z ważnym tokenem TEJ misji (CloudTAK po
+    # subskrypcji pyta samym tokenem, bez hasła, i wcześniej dostawał tu 401).
+    token = verify_token() if "iTAK" not in request.user_agent.string else None
+    token_for_mission = bool(token) and token.get("MISSION_GUID") == mission.guid
+    if mission.password_protected:
+        allowed = verify_password(password, mission.password) if password else token_for_mission
+        if not allowed:
+            return jsonify({"success": False, "error": gettext("Invalid password")}), 401
 
     mission_json = mission.to_marti_json()
     # TAK Server zwraca token misji; CloudTAK otwiera z nim misję po odblokowaniu hasłem
-    token = verify_token() if "iTAK" not in request.user_agent.string else None
     token_uid = (token or {}).get("sub") or request.args.get("clientUid")
     if token_uid:
         mission_json["token"] = generate_token(mission, token_uid)

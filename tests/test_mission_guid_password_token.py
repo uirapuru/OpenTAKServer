@@ -54,3 +54,16 @@ def test_response_carries_a_mission_token(protected, client):
 def test_wrong_password_is_still_refused(protected, client):
     response = client.get(f"/Marti/api/missions/guid/{GUID}?password=zle")
     assert response.status_code == 401
+
+
+def test_no_password_and_no_token_is_refused(protected, client, monkeypatch):
+    api = importlib.import_module("opentakserver.blueprints.marti_api.mission_marti_api")
+    monkeypatch.setattr(api, "verify_token", lambda: False)
+    assert client.get(f"/Marti/api/missions/guid/{GUID}").status_code == 401
+    assert client.get(f"/Marti/api/missions/guid/{GUID}?password=").status_code == 401
+
+
+def test_token_of_another_mission_is_refused(protected, client, monkeypatch):
+    api = importlib.import_module("opentakserver.blueprints.marti_api.mission_marti_api")
+    monkeypatch.setattr(api, "verify_token", lambda: {"sub": CLIENT_UID, "MISSION_NAME": "inna", "MISSION_GUID": "inny-guid"})
+    assert client.get(f"/Marti/api/missions/guid/{GUID}").status_code == 401
