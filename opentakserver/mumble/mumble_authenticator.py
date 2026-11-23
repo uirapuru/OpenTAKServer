@@ -6,20 +6,24 @@ from flask_ldap3_login import AuthenticationResponseStatus
 from flask_security import verify_password
 
 from ..extensions import ldap_manager
+from .auth_rules import decide, parse_display_name
 
-# Load up Murmur slice file into Ice
+# Load up Murmur slice file into Ice (Ice 3.8: one list argument)
 Ice.loadSlice(
-    "",
     [
         "-I" + Ice.getSliceDir(),
         os.path.join(os.path.dirname(os.path.realpath(__file__)), "Murmur.ice"),
-    ],
+    ]
 )
-import Murmur
+import Murmur  # noqa: E402
 
 
 class MumbleAuthenticator(Murmur.ServerUpdatingAuthenticator):
-    texture_cache = {}
+    """Murmur authenticator backed by OTS accounts.
+
+    Ice 3.8 marshals return values by their Slice types, so every method
+    returns a value of the declared type (no None for strings/sequences).
+    """
 
     def __init__(self, app, logger, ice):
         Murmur.ServerUpdatingAuthenticator.__init__(self)
@@ -29,110 +33,68 @@ class MumbleAuthenticator(Murmur.ServerUpdatingAuthenticator):
 
     def authenticate(self, username, password, certlist, certhash, strong, current=None):
         """
-        This function is called to authenticate a user
+        This function is called to authenticate a user.
+
+        taklab: "<callsign> (<account>)" with the account's enrollment token or
+        password, see opentakserver.mumble.auth_rules.
         """
-        if username == "SuperUser":
-            return (-2, None, None)
-
-        # The ATAK Vx plugin sends the Mumble username as "callsign---uid".
-        # Strip the UID suffix so lookup matches the OTS account (named after the callsign).
-        if "---" in username:
-            callsign = username.split("---")[0].strip()
-            if callsign:
-                username = callsign
-
-        self.logger.info("Mumble auth request for {}".format(username))
+        from opentakserver.models.Token import Token
 
         with self.app.app_context():
-            user = self.app.security.datastore.find_user(username=username)
-            if not user:
-                self.logger.warning("Mumble auth: User {} not found".format(username))
-                return -1, None, None
-            elif not user.active:
-                self.logger.warning("Mumble auth: User {} is deactivated".format(username))
-                return -1, None, None
 
-            if self.app.config.get("OTS_ENABLE_LDAP"):
-                auth_result = ldap_manager.authenticate(username, password)
-                if auth_result.status == AuthenticationResponseStatus.success:
-                    self.logger.info("Mumble auth: {} has been authenticated".format(username))
+            def find_user(account):
+                return self.app.security.datastore.find_user(username=account)
 
-                    # Keep this import here to avoid a circular import when OTS is started
-                    from opentakserver.blueprints.ots_api.ldap_api import save_user
+            def check_password(given, stored):
+                if self.app.config.get("OTS_ENABLE_LDAP"):
+                    parsed = parse_display_name(username)
+                    if not parsed:
+                        return False
+                    result = ldap_manager.authenticate(parsed[1], given)
+                    return result.status == AuthenticationResponseStatus.success
+                return bool(stored) and verify_password(given, stored)
 
-                    save_user(
-                        auth_result.user_dn,
-                        auth_result.user_id,
-                        auth_result.user_info,
-                        auth_result.user_groups,
-                    )
+            user_id, new_name = decide(
+                username,
+                password or "",
+                find_user,
+                Token.belongs_to,
+                check_password,
+                self.app.config.get("OTS_MUMBLE_SHARED_PASSWORD") or "",
+            )
 
-                    return user.id, user.username, None
-
-            elif verify_password(password, user.password):
-                self.logger.info("Mumble auth: {} has been authenticated".format(username))
-                return user.id, user.username, None
-
-            self.logger.warning("Mumble auth: Bad password for {}".format(username))
-            return -1, None, None
+        if user_id >= 0:
+            self.logger.info("Mumble auth: {} has been authenticated".format(new_name))
+        elif user_id == -1:
+            self.logger.warning("Mumble auth: rejected {}".format(username))
+        return user_id, new_name or "", []
 
     def idToTexture(self, id, current=None):
-        return
+        return b""
 
     def getInfo(self, id, current=None):
-        """
-        Gets called to fetch user specific information
-        """
-
-        # We do not expose any additional information so always fall through
-        return False, None
+        # No additional information; fall through
+        return False, {}
 
     def nameToId(self, name, current=None):
-        """
-        Gets called to get the id for a given username
-        """
-        pass
+        # Unknown here; fall through to Murmur
+        return -2
 
     def idToName(self, id, current=None):
-        """
-        Gets called to get the username for a given id
-        """
-        pass
-
-    def idToTexture(self, id, current=None):
-        """
-        Gets called to get the corresponding texture for a user
-        """
-        # seems like it pulled a user's avatar from a phpbb DB
+        return ""
 
     def registerUser(self, name, current=None):
-        """
-        Gets called when the server is asked to register a user.
-        """
-        pass
+        # taklab: accounts live in OTS, so Mumble self-registration is refused.
+        return -1
 
     def unregisterUser(self, id, current=None):
-        """
-        Gets called when the server is asked to unregister a user.
-        """
-        pass
+        return -2
 
     def getRegisteredUsers(self, filter, current=None):
-        """
-        Returns a list of usernames in the phpBB3 database which contain
-        filter as a substring.
-        """
-        pass
+        return {}
 
     def setInfo(self, id, info, current=None):
-        """
-        Gets called when the server is supposed to save additional information
-        about a user to his database
-        """
-        pass
+        return -1
 
     def setTexture(self, id, texture, current=None):
-        """
-        Gets called when the server is asked to update the user texture of a user
-        """
-        pass
+        return -1

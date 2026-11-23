@@ -65,6 +65,8 @@ class DefaultConfig:
     OTS_MUMBLE_ICE_PORT = int(os.getenv("OTS_MUMBLE_ICE_PORT", 6502))
     # taklab: ustawienia wtyczki ATAK TakLab (/Marti/api/taklab/config), podaje chart ots-env
     OTS_TAKLAB_HOST = os.getenv("OTS_TAKLAB_HOST", "")
+    # Wspólne hasło Mumble: tylko połączenia techniczne w klastrze idą dalej do Murmura
+    OTS_MUMBLE_SHARED_PASSWORD = os.getenv("OTS_MUMBLE_SHARED_PASSWORD", "")
     OTS_TAKLAB_MUMBLE_PORT = int(os.getenv("OTS_TAKLAB_MUMBLE_PORT", "0") or 0)
     OTS_TAKLAB_RTSP_PORT = int(os.getenv("OTS_TAKLAB_RTSP_PORT", "0") or 0)
     OTS_TAKLAB_MUMBLE_CHANNELS = os.getenv("OTS_TAKLAB_MUMBLE_CHANNELS", "[]")
