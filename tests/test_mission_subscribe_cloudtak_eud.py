@@ -48,7 +48,7 @@ def cert_user(monkeypatch):
         if current["username"] is None:
             return False
         cert = MagicMock()
-        cert.get_subject.return_value.commonName = current["username"]
+        cert.subject.get_attributes_for_oid.return_value = [MagicMock(value=current["username"])]
         return cert
 
     monkeypatch.setattr(module, "verify_client_cert", fake_cert)

@@ -52,7 +52,7 @@ def _fake_cert(monkeypatch):
     mission_marti_api = importlib.import_module("opentakserver.blueprints.marti_api.mission_marti_api")
 
     cert = MagicMock()
-    cert.get_subject.return_value.commonName = "itak-user"
+    cert.subject.get_attributes_for_oid.return_value = [MagicMock(value="itak-user")]
     monkeypatch.setattr(mission_marti_api, "verify_client_cert", lambda: cert)
 
 

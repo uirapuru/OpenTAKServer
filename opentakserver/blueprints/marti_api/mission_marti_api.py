@@ -9,6 +9,7 @@ import uuid
 import zipfile
 from urllib.parse import urlparse
 from xml.etree.ElementTree import Element, SubElement, fromstring, tostring
+from pathlib import Path
 
 import bleach
 import flask
@@ -16,6 +17,7 @@ import jwt
 import pika
 import sqlalchemy.exc
 from bs4 import BeautifulSoup
+from cryptography.hazmat._oid import NameOID
 from flask import Blueprint, Response
 from flask import current_app as app
 from flask import has_request_context, jsonify, request
@@ -84,10 +86,10 @@ def verify_token() -> dict | bool:
 # iTAK sucks and doesn't send a token for some reason...
 def verify_itak_certificate(
     mission_name: str = None, mission_guid: str = None
-) -> MissionRole | flask.Response:
+) -> MissionRole | tuple:
     # Get the username from the client cert forwarded by nginx
     cert = verify_client_cert()
-    username = cert.get_subject().commonName
+    username = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
 
     # Check that the user exists
     user = db.session.execute(db.session.query(User).filter_by(username=username)).first()
@@ -379,12 +381,12 @@ def get_missions():
     if not cert:
         return "", 401
 
-    username = cert.get_subject().commonName
+    username = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
     user = app.security.datastore.find_user(username=username)
 
     password_protected = request.args.get("passwordProtected", False)
 
-    tool = request.args.get("tool")
+    tool = request.args.get("tool", "public")
     if tool:
         tool = bleach.clean(tool)
 
@@ -400,7 +402,7 @@ def get_missions():
     }
 
     try:
-        query = db.session.query(Mission)
+        query = db.session.query(Mission).filter_by(tool=tool)
 
         # Let admins see all missions
         if not user.has_role("administrator"):
@@ -420,7 +422,7 @@ def get_missions():
         for mission in missions:
             if not password_protected and mission.password_protected:
                 continue
-            if tool and tool.lower() != "public" and mission.tool != tool:
+            if mission.tool != tool:
                 continue
             response["data"].append(mission.to_marti_json())
 
@@ -459,8 +461,6 @@ def all_invitations(mission_name: str | None = None, mission_guid: str | None = 
     elif mission_guid:
         query = query.join(Mission).where(Mission.guid == mission_guid)
 
-    logger.info(query)
-
     invitations = db.session.execute(query).all()
 
     for invitation in invitations:
@@ -474,6 +474,7 @@ def put_mission(mission_name: str):
     """Used by the Data Sync plugin to create or change a mission"""
     cert = verify_client_cert()
     if not cert:
+        logger.debug("Failed to verify client cert")
         return (
             jsonify(
                 {
@@ -484,12 +485,15 @@ def put_mission(mission_name: str):
             400,
         )
 
-    username = cert.get_subject().commonName
+    username = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
     user = app.security.datastore.find_user(username=username)
 
     new_mission = True
 
-    if not mission_name or not request.args.get("creatorUid"):
+    creator_uid = request.args.get("creatorUid") or request.args.get("uid")
+
+    if not mission_name or not creator_uid:
+        logger.debug("No creatorUid provided")
         return (
             jsonify(
                 {"success": False, "error": gettext("Please provide a mission name and creatorUid")}
@@ -497,17 +501,16 @@ def put_mission(mission_name: str):
             400,
         )
 
-    eud = db.session.execute(
-        db.session.query(EUD).filter_by(uid=request.args.get("creatorUid"))
-    ).first()
+    eud = db.session.execute(db.session.query(EUD).filter_by(uid=creator_uid)).first()
     if not eud:
+        logger.debug("No EUD provided")
         return (
             jsonify(
                 {
                     "success": False,
                     "error": gettext(
                         "Invalid creatorUid: %(creator_uid)s",
-                        creator_uid=request.args.get("creatorUid"),
+                        creator_uid=creator_uid,
                     ),
                 }
             ),
@@ -606,6 +609,12 @@ def put_mission(mission_name: str):
                 pika.ConnectionParameters(host=rabbit_host, credentials=rabbit_credentials)
             )
             channel = rabbit_connection.channel()
+
+            channel.queue_bind(
+                queue=mission.creator_uid,
+                exchange="missions",
+                routing_key=f"missions.{mission_name}",
+            )
 
             groups = db.session.execute(
                 db.session.query(GroupUser).filter_by(user_id=user.id, enabled=True)
@@ -1451,7 +1460,7 @@ def mission_subscribe(mission_name: str = None, mission_guid: str = None):
     if not cert:
         # Wcześniej kończyło się wyjątkiem (500) na cert.get_subject()
         return jsonify({"success": False, "error": gettext("Missing client certificate")}), 400
-    username = cert.get_subject().commonName
+    username = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
     user = app.security.datastore.find_user(username=username)
 
     if mission_name:
@@ -1461,7 +1470,7 @@ def mission_subscribe(mission_name: str = None, mission_guid: str = None):
     else:
         mission = None
 
-    if not mission and mission_name:
+    if not mission and mission_name and mission_name != "citrap":
         return (
             jsonify(
                 {
@@ -1473,6 +1482,11 @@ def mission_subscribe(mission_name: str = None, mission_guid: str = None):
             ),
             404,
         )
+
+    if not mission and mission_name and mission_name == "citrap":
+        # Create the citrap mission for the Reports plugin
+        return put_mission(mission_name)
+
     if not mission and mission_guid:
         return (
             jsonify(
@@ -1679,8 +1693,8 @@ def mission_unsubscribe(mission_name: str):
 
 
 @mission_marti_api.route("/Marti/api/missions/<mission_name>/changes", methods=["GET"])
-def mission_changes(mission_name):
-    permission_granted = check_permission(mission_name)
+def mission_changes(mission_name: str | None = None, mission_guid: str | None = None):
+    permission_granted = check_permission(mission_name, mission_guid)
     if isinstance(permission_granted, flask.Response):
         return permission_granted
 
@@ -1695,12 +1709,24 @@ def mission_changes(mission_name):
         "nodeId": app.config.get("OTS_NODE_ID"),
     }
 
-    changes = db.session.execute(
-        db.session.query(MissionChange).filter_by(mission_name=mission_name)
-    ).all()
+    if mission_name:
+        changes = db.session.execute(
+            db.session.query(MissionChange).filter_by(mission_name=mission_name)
+        ).all()
+    elif mission_guid:
+        changes = db.session.execute(
+            db.session.query(MissionChange).filter_by(mission_uid=mission_guid)
+        ).all()
+    else:
+        return (
+            jsonify({"success": False, "error": gettext("Please provide a mission name or GUID")}),
+            400,
+        )
+
     for change in changes:
         response["data"].append(change[0].to_json())
 
+    logger.debug(f"Returning {response}")
     return jsonify(response)
 
 
@@ -1812,9 +1838,13 @@ def upload_content():
     if not cert:
         return jsonify({"success": False, "error": gettext("Missing or invalid certificate")}), 400
 
-    username = cert.get_subject().commonName
+    username = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
 
-    file_name = bleach.clean(request.args.get("name")) if "name" in request.args else None
+    if not request.args.get("name"):
+        return jsonify({"success": False, "error": gettext("File name cannot be blank")}), 400
+
+    file_name = Path(request.args.get("name")).name
+    file_name = secure_filename(file_name) if "name" in request.args else None
     keywords = request.args.getlist("keywords")
 
     if "creatorUid" in request.args:
@@ -1824,9 +1854,6 @@ def upload_content():
         creator_uid = request.args.get("CreatorUid")
     else:
         creator_uid = None
-
-    if not file_name:
-        return jsonify({"success": False, "error": gettext("File name cannot be blank")}), 400
 
     # When uploading data packages, iTAK doesn't include an extension. If the user agent is iTAK and
     # the content type is zip, assume that iTAK is uploading a data package
@@ -1968,7 +1995,7 @@ def add_content_keywords(content_hash: str):
 @mission_marti_api.route("/Marti/api/missions/<mission_name>/contents", methods=["PUT"])
 def mission_contents(mission_name: str | None = None, mission_guid: str | None = None):
     """Associates content/files with a mission"""
-    permission_granted = check_permission(mission_name)
+    permission_granted = check_permission(mission_name, mission_guid)
     if isinstance(permission_granted, flask.Response):
         return permission_granted
 
@@ -2515,7 +2542,7 @@ def mission_package_user() -> User | None:
         cert = verify_client_cert()
         if not cert:
             return None
-        return app.security.datastore.find_user(username=cert.get_subject().commonName)
+        return app.security.datastore.find_user(username=cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value)
     except Exception as e:
         logger.warning(f"Failed to identify the mission package sender: {e}")
         return None
@@ -2539,7 +2566,7 @@ def mission_cots(mission_name: str) -> list[CoT]:
 
 @mission_marti_api.route("/Marti/api/missions/<mission_name>/cot")
 @mission_marti_api.route("/Marti/api/missions/guid/<mission_guid>/cot")
-def get_mission_cots(mission_name: str = None, mission_guid: str = None):
+def get_mission_cots(mission_name: str | None = None, mission_guid: str | None = None):
     """
     Used by the Data Sync plugin to get all CoTs associated with a feed. Returns the CoTs encapsulated by an
     <events> tag

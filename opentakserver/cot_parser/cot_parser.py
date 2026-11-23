@@ -10,6 +10,7 @@ import time
 import traceback
 import uuid
 from logging.handlers import TimedRotatingFileHandler
+from xml.etree.ElementTree import tostring
 
 import bleach
 import colorlog
@@ -68,6 +69,13 @@ from opentakserver.models.VideoRecording import VideoRecording
 from opentakserver.models.VideoStream import VideoStream
 from opentakserver.models.WebAuthn import WebAuthn
 from opentakserver.models.ZMIST import ZMIST
+from opentakserver.models.CITrap import CITrap
+from opentakserver.models.Federate import Federate
+from opentakserver.models.FederateGroupMapping import FederateGroupMapping
+from opentakserver.models.FederationConnection import FederationConnection
+from opentakserver.models.FederateToken import FederateToken
+from opentakserver.models.FederateGroups import FederateGroups
+from opentakserver.models.FederationGroups import FederationGroups
 from opentakserver.proto import atak_pb2
 
 # Stamp with the sender's account name, added to every direct message.
@@ -162,6 +170,7 @@ class CoTController:
             p.longitude = float(point.attrs["lon"])
             p.timestamp = datetime_from_iso8601_string(event.attrs["time"])
             p.cot_id = cot_id
+            p.point = f"POINT({float(point.attrs['lon'])} {float(point.attrs['lat'])})"
 
             # We only really care about the rest of the data if there's a valid lat/lon
             if p.latitude == 0 and p.longitude == 0:
@@ -219,6 +228,7 @@ class CoTController:
                         battery=p.battery,
                         fov=p.fov,
                         azimuth=p.azimuth,
+                        point=p.point,
                     )
                 )
 
@@ -266,9 +276,10 @@ class CoTController:
                 ).first()[0]
 
                 # This CoT is a position update for an EUD. Send it to socketio clients so it can be seen on the UI map
-                # OpenTAK ICU position updates don't include the <takv> tag, but we still want to send the updated position
-                # to the UI's map
-                if event.find("takv") or event.find("__video"):
+                # Not every EUD sends <takv>: OpenTAK ICU omits it, and so do non-ATAK clients that connect directly
+                # to the server (e.g. Somewear's direct server connection) and CoT bridges/gateways. Those positions
+                # reach ATAK/iTAK fine but never reached the UI's map. <contact> is what every EUD position carries.
+                if event.find("takv") or event.find("__video") or event.find("contact") is not None:
                     self.socketio.emit("point", p.to_json(), namespace="/socket.io")
 
                 if self.context.app.config.get("OTS_ENABLE_MESHTASTIC"):
@@ -979,7 +990,7 @@ class CoTController:
             flow_tags = SubElement(
                 detail,
                 "_flow-tags_",
-                {"TAK-Server-f1a8159ef7804f7a8a32d8efc4b773d0": iso8601_string_from_datetime(now)},
+                {f"TAK-Server-{app.config.get('OTS_NODE_ID')}": iso8601_string_from_datetime(now)},
             )
 
             message = json.dumps({"uid": uid, "cot": tostring(event).decode("utf-8")})
@@ -1000,7 +1011,7 @@ class CoTController:
                             ),
                         )
 
-                        self.rabbit_channel.queue_bind(
+                        self.rabbit_channel.queue_unbind(
                             queue=uid,
                             exchange="groups",
                             routing_key=f"{group.group.name}.{group.direction}",
@@ -1009,11 +1020,7 @@ class CoTController:
                         self.logger.debug(
                             f"Unbound {uid} from {group.group.name}.{group.direction}"
                         )
-            elif (
-                self.rabbit_channel
-                and not self.rabbit_channel.is_closing
-                and not self.rabbit_channel.is_closed
-            ):
+            elif self.rabbit_channel and not self.rabbit_channel.is_closed:
                 self.rabbit_channel.basic_publish(
                     exchange="groups",
                     routing_key=f"__ANON__.{Group.OUT}",
@@ -1405,6 +1412,7 @@ class CoTController:
             )
             return
 
+        # TODO: LDAP
         if not destinations:
             with self.context:
                 group_memberships = db.session.execute(

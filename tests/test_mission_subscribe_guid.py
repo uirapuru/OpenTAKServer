@@ -50,7 +50,7 @@ def subscriber(app, monkeypatch):
         "opentakserver.blueprints.marti_api.mission_marti_api"
     )
     cert = MagicMock()
-    cert.get_subject.return_value.commonName = USERNAME
+    cert.subject.get_attributes_for_oid.return_value = [MagicMock(value=USERNAME)]
     monkeypatch.setattr(mission_marti_api, "verify_client_cert", lambda: cert)
     # Klucz serwera do podpisu tokenu nie istnieje w testach
     monkeypatch.setattr(mission_marti_api, "generate_token", lambda mission, uid: "token")

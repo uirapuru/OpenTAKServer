@@ -20,7 +20,7 @@ class VideoStream(db.Model):
     protocol: Mapped[str] = mapped_column(String(255), default="rtsp")
     port: Mapped[int] = mapped_column(Integer, default=8554)
     network_timeout: Mapped[int] = mapped_column(Integer, default=10000)
-    uid: Mapped[str] = mapped_column(String(255), nullable=True, default=str(uuid.uuid4()))
+    uid: Mapped[str] = mapped_column(String(255), nullable=True, default=lambda: str(uuid.uuid4()))
     buffer_time: Mapped[int] = mapped_column(Integer, nullable=True)
     rover_port: Mapped[int] = mapped_column(Integer, nullable=True)
     rtsp_reliable: Mapped[int] = mapped_column(Integer, nullable=True, default=1)
@@ -107,7 +107,9 @@ class VideoStream(db.Model):
         elif not port and protocol == "http":
             port = 80
 
-        video_uuid = str(uuid.uuid4())
+        # Ten sam uid co w bazie: GET /Marti/api/video/<uid> szuka po video_streams.uid,
+        # a losowy uuid dawał w CloudTAK „Video not found” przy „Edit Lease”
+        video_uuid = self.uid or str(uuid.uuid4())
 
         return {
             "active": True,

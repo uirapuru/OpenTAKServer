@@ -1,7 +1,5 @@
 import os
-import random
 import secrets
-import string
 from pathlib import Path
 
 import pyotp
@@ -23,11 +21,15 @@ class DefaultConfig:
         "PL": {"name": "Polski", "language_code": "pl"},
         "BR": {"name": "Português", "language_code": "pt_BR"},
         "IT": {"name": "Italiano", "language_code": "it"},
-        "JA": {"name": "日本語", "language_code": "ja"},
+        "JP": {"name": "日本語", "language_code": "ja"},
         "NL": {"name": "Nederlands", "language_code": "nl"},
         "CN": {"name": "简化字", "language_code": "zh_Hans"},
         "SE": {"name": "Svenska", "language_code": "sv"},
         "TH": {"name": "ภาษาไทย", "language_code": "th"},
+        "HU": {"name": "Magyar", "language_code": "hu"},
+        "CZ": {"name": "Čeština", "language_code": "cs"},
+        "PS": {"name": "اَلْعَرَبِيَّةُ", "language_code": "ar"},
+        "EE": {"name": "Eesti Keel", "language_code": "et"},
     }
 
     OTS_DATA_FOLDER = os.getenv("OTS_DATA_FOLDER", os.path.join(Path.home(), "ots"))
@@ -82,9 +84,7 @@ class DefaultConfig:
     OTS_VIDEO_PUBLIC_RTMP_PORT = int(os.getenv("OTS_VIDEO_PUBLIC_RTMP_PORT", 1935))
     OTS_SSL_VERIFICATION_MODE = int(os.getenv("OTS_SSL_VERIFICATION_MODE", 2))
     OTS_SSL_CERT_HEADER = os.getenv("OTS_SSL_CERT_HEADER", "X-Ssl-Cert")
-    OTS_NODE_ID = os.getenv(
-        "OTS_NODE_ID", "".join(random.choices(string.ascii_lowercase + string.digits, k=32))
-    )
+    OTS_NODE_ID = os.getenv("OTS_NODE_ID", secrets.token_hex(16))
     # Nazwa misji wspólnej, do której trafiają obiekty rozgłoszone. Pusta = funkcja wyłączona.
     OTS_SHARED_MISSION = os.getenv("OTS_SHARED_MISSION", "")
 
@@ -112,6 +112,11 @@ class DefaultConfig:
         "OTS_CA_SUBJECT",
         f"/C={OTS_CA_COUNTRY}/ST={OTS_CA_STATE}/L={OTS_CA_CITY}/O={OTS_CA_ORGANIZATION}/OU={OTS_CA_ORGANIZATIONAL_UNIT}",
     )
+
+    # Federation
+    OTS_FEDERATION_CERTIFICATE = os.path.join(OTS_CA_FOLDER, "ca.pem")
+    OTS_FEDERATION_HEALTHCHECK = True
+    OTS_FEDERATION_HEALTHCHECK_INTERVAL = 5
 
     OTS_COT_PARSER_PROCESSES = int(os.getenv("OTS_COT_PARSER_PROCESSES", 1))
 
@@ -228,6 +233,7 @@ class DefaultConfig:
     SECURITY_USERNAME_REQUIRED = True
     SECURITY_TRACKABLE = True
     SECURITY_CSRF_COOKIE_NAME = "XSRF-TOKEN"
+    WTF_CSRF_ENABLED = False
     WTF_CSRF_TIME_LIMIT = None
     SECURITY_CSRF_IGNORE_UNAUTH_ENDPOINTS = True
     WTF_CSRF_CHECK_DEFAULT = False
