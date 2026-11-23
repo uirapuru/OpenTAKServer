@@ -63,6 +63,11 @@ class DefaultConfig:
     # when Mumble and OpenTAKServer share a machine.
     OTS_MUMBLE_ICE_HOST = os.getenv("OTS_MUMBLE_ICE_HOST", "127.0.0.1")
     OTS_MUMBLE_ICE_PORT = int(os.getenv("OTS_MUMBLE_ICE_PORT", 6502))
+    # taklab: ustawienia wtyczki ATAK TakLab (/Marti/api/taklab/config), podaje chart ots-env
+    OTS_TAKLAB_HOST = os.getenv("OTS_TAKLAB_HOST", "")
+    OTS_TAKLAB_MUMBLE_PORT = int(os.getenv("OTS_TAKLAB_MUMBLE_PORT", "0") or 0)
+    OTS_TAKLAB_RTSP_PORT = int(os.getenv("OTS_TAKLAB_RTSP_PORT", "0") or 0)
+    OTS_TAKLAB_MUMBLE_CHANNELS = os.getenv("OTS_TAKLAB_MUMBLE_CHANNELS", "[]")
 
     # TAK.gov account link settings
     OTS_TAK_GOV_LINKED = False
