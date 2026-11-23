@@ -298,6 +298,11 @@ def create_app(cli=True):
                         conf[option] = DefaultConfig.__dict__[option]
                 config.write(yaml.safe_dump(conf))
 
+        # taklab: environment wins over config.yml for chart-driven keys
+        from opentakserver.config_helpers import apply_env_overrides
+
+        apply_env_overrides(app.config)
+
         # Try to set the MediaMTX token
         if app.config.get("OTS_MEDIAMTX_ENABLE"):
             try:

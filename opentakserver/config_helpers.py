@@ -154,3 +154,35 @@ def iso8601_string_from_datetime(datetime_object: datetime | None = None) -> str
         return datetime_object.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-2] + "Z"
     else:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-2] + "Z"
+
+
+# taklab: keys whose environment variable wins over config.yml. OTS writes
+# config.yml from DefaultConfig on first start and the file then shadows the
+# environment, so settings given by the Helm chart (TakLab plugin route, Mumble
+# login through Ice) were silently ignored.
+_ENV_OVERRIDE_BOOL = ("OTS_ENABLE_MUMBLE_AUTHENTICATION",)
+_ENV_OVERRIDE_INT = ("OTS_TAKLAB_MUMBLE_PORT", "OTS_TAKLAB_RTSP_PORT")
+_ENV_OVERRIDE_STR = (
+    "OTS_TAKLAB_HOST",
+    "OTS_TAKLAB_MUMBLE_DB",
+    "OTS_TAKLAB_MUMBLE_CHANNELS",
+    "OTS_MUMBLE_SHARED_PASSWORD",
+)
+
+
+def apply_env_overrides(config) -> None:
+    """Copy the environment value of each taklab key into ``config``, if set."""
+    import os
+
+    for key in _ENV_OVERRIDE_BOOL:
+        if key in os.environ:
+            config[key] = os.environ[key].strip().lower() in ("1", "true", "yes", "on")
+    for key in _ENV_OVERRIDE_INT:
+        if key in os.environ:
+            try:
+                config[key] = int(os.environ[key].strip() or 0)
+            except ValueError:
+                config[key] = 0
+    for key in _ENV_OVERRIDE_STR:
+        if key in os.environ:
+            config[key] = os.environ[key]
