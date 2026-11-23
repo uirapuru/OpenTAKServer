@@ -61,9 +61,14 @@ def get_all_groups():
         if groups:
             for group in groups:
                 if group.direction == Group.IN:
-                    response["data"].append(group.group.to_marti_json_in())
+                    entry = group.group.to_marti_json_in()
                 else:
-                    response["data"].append(group.group.to_marti_json_out())
+                    entry = group.group.to_marti_json_out()
+                # taklab: the real state of the channel. Upstream always sent
+                # active=True, so CloudTAK showed a disabled channel as enabled
+                # after reloading the group list.
+                entry["active"] = group.enabled is not False
+                response["data"].append(entry)
                 number_of_groups += 1
 
         # If a user is not assigned to any groups, default them to the __ANON__ group
