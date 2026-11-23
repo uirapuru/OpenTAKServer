@@ -16,16 +16,25 @@ def make_authenticator():
     return auth, datastore
 
 
-@pytest.mark.parametrize(
-    "raw_username,expected_lookup",
-    [
-        ("ANVIL---47c4c853-4e52-4b97-9a0b-08a0f961b0fa", "ANVIL"),
-        ("plainuser", "plainuser"),
-    ],
-)
-def test_username_lookup_strips_atak_vx_uid_suffix(raw_username, expected_lookup):
+def test_account_taken_from_parentheses():
     auth, datastore = make_authenticator()
 
-    auth.authenticate(raw_username, "password", None, None, None)
+    result = auth.authenticate("Alfa 1 (pluton1)", "password", None, None, None)
 
-    datastore.find_user.assert_called_once_with(username=expected_lookup)
+    datastore.find_user.assert_called_once_with(username="pluton1")
+    assert result == (-1, "", [])
+
+
+def test_vx_style_name_rejected_without_lookup():
+    # taklab 23 XI 2026: Vx dropped; "callsign---uid" is no longer an account name
+    auth, datastore = make_authenticator()
+
+    assert auth.authenticate("ANVIL---47c4c853", "password", None, None, None) == (-1, "", [])
+    datastore.find_user.assert_not_called()
+
+
+def test_shared_password_falls_through():
+    auth, datastore = make_authenticator()
+    auth.app.config.get.side_effect = lambda key, *a: "wspolne" if key == "OTS_MUMBLE_SHARED_PASSWORD" else None
+
+    assert auth.authenticate("ADMIN-CloudTAK", "wspolne", None, None, None) == (-2, "", [])
