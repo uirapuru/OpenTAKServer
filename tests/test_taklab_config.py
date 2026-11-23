@@ -158,3 +158,28 @@ def test_version_changes_with_channels(taklab_env, client, cert_user):
     assert _get(client).json["version"] == first
     taklab_env.config["OTS_TAKLAB_MUMBLE_CHANNELS"] = json.dumps(CHANNELS[:1])
     assert _get(client).json["version"] != first
+
+
+def test_channels_read_from_mumble_db(taklab_env, client, cert_user, tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "mumble-server.sqlite"
+    con = sqlite3.connect(db_path)
+    con.execute("CREATE TABLE channels (server_id INTEGER, channel_id INTEGER, parent_id INTEGER, name TEXT)")
+    con.executemany(
+        "INSERT INTO channels VALUES (?, ?, ?, ?)",
+        [(1, 0, None, "Root"), (1, 3, 0, "Pluton 2"), (1, 1, 0, "Dowodzenie"), (1, 7, 0, "Ręczny"), (2, 9, 0, "Inny serwer")],
+    )
+    con.commit()
+    con.close()
+    taklab_env.config["OTS_TAKLAB_MUMBLE_DB"] = str(db_path)
+    _user(taklab_env)
+    assert _get(client).json["voice"]["channels"] == [
+        {"id": 1, "name": "Dowodzenie"}, {"id": 3, "name": "Pluton 2"}, {"id": 7, "name": "Ręczny"},
+    ]
+
+
+def test_unreadable_mumble_db_falls_back_to_env(taklab_env, client, cert_user, tmp_path):
+    taklab_env.config["OTS_TAKLAB_MUMBLE_DB"] = str(tmp_path / "missing.sqlite")
+    _user(taklab_env)
+    assert _get(client).json["voice"]["channels"] == CHANNELS

@@ -8,6 +8,7 @@ na hasło. Odpowiedzi z tokenem nie wolno buforować ani zapisywać w dzienniku.
 
 import hashlib
 import json
+import sqlite3
 
 from cryptography.x509.oid import NameOID
 from flask import Blueprint
@@ -28,7 +29,31 @@ def _port(key: str) -> int:
         return 0
 
 
+def _channels_from_mumble_db() -> list[dict] | None:
+    """Kanały wprost z bazy Murmura we wspólnym wolumenie poda. Numery nadaje
+    kontener startowy jako MAX+1, więc lista z chartu mogłaby się nie zgadzać."""
+    path = app.config.get("OTS_TAKLAB_MUMBLE_DB")
+    if not path:
+        return None
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2)
+        try:
+            rows = con.execute(
+                "SELECT channel_id, name FROM channels "
+                "WHERE server_id = 1 AND channel_id > 0 ORDER BY channel_id"
+            ).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        logger.warning("Cannot read Mumble channels from {}: {}".format(path, e))
+        return None
+    return [{"id": int(cid), "name": str(name)} for cid, name in rows]
+
+
 def _channels() -> list[dict]:
+    from_db = _channels_from_mumble_db()
+    if from_db is not None:
+        return from_db
     try:
         channels = json.loads(app.config.get("OTS_TAKLAB_MUMBLE_CHANNELS") or "[]")
     except ValueError:

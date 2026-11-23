@@ -70,6 +70,7 @@ class DefaultConfig:
     OTS_TAKLAB_MUMBLE_PORT = int(os.getenv("OTS_TAKLAB_MUMBLE_PORT", "0") or 0)
     OTS_TAKLAB_RTSP_PORT = int(os.getenv("OTS_TAKLAB_RTSP_PORT", "0") or 0)
     OTS_TAKLAB_MUMBLE_CHANNELS = os.getenv("OTS_TAKLAB_MUMBLE_CHANNELS", "[]")
+    OTS_TAKLAB_MUMBLE_DB = os.getenv("OTS_TAKLAB_MUMBLE_DB", "")
 
     # TAK.gov account link settings
     OTS_TAK_GOV_LINKED = False
