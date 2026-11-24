@@ -26,6 +26,7 @@ from flask_security import current_user, hash_password, verify_password
 from sqlalchemy import func, insert, or_, select, update
 from werkzeug.utils import secure_filename
 
+from opentakserver import taklab_journal
 from opentakserver.blueprints.marti_api.data_package_marti_api import save_data_package_file
 from opentakserver.blueprints.marti_api.marti_api import verify_client_cert
 from opentakserver.cot_parser.shared_mission import FEDERATION_USERNAME_PREFIX
@@ -1871,6 +1872,7 @@ def upload_content():
                 500,
             )
 
+        taklab_journal.record_data_package(file_hash, username, creator_uid)
         response = {
             "UID": str(uuid.uuid4()),
             "SubmissionDateTime": iso8601_string_from_datetime(),
@@ -1939,6 +1941,7 @@ def upload_content():
     with open(os.path.join(app.config.get("OTS_DATA_FOLDER"), "missions", file_name), "wb") as f:
         f.write(file)
         f.flush()
+    taklab_journal.record_file_upload("mission_content", content.hash, file_name, len(file), content.mime_type, username, creator_uid)
 
     response = {
         "UID": content.uid,

@@ -30,6 +30,7 @@ from pika.channel import Channel
 from sqlalchemy import exc, func, insert, select, update
 
 from opentakserver.cot_parser.tdd import is_self_delete
+from opentakserver import taklab_journal
 from opentakserver.cot_parser.shared_mission import (
     FEDERATION_USERNAME_PREFIX,
     forced_delete_target,
@@ -1455,6 +1456,7 @@ class CoTController:
 
             if body.get("disconnected"):
                 self.send_disconnect_cot(body.get("uid"), body.get("user_id"))
+                taklab_journal.record_disconnect(body.get("uid"), body.get("user_id"), self.context)
                 self.rabbit_channel.basic_ack(delivery_tag=basic_deliver.delivery_tag)
                 return
 
@@ -1491,6 +1493,7 @@ class CoTController:
                 self.generate_mission_change(uid, event, body.get("user_id"))
                 self.handle_shared_mission(event, uid, body.get("user_id"))
                 self.route_cot(event, uid, body.get("user_id"))
+                taklab_journal.record_cot(event, uid, body.get("user_id"), self.context)
                 self.rabbit_channel.basic_ack(delivery_tag=basic_deliver.delivery_tag)
 
                 # EUD went offline. t-x-d-d is also sent when a user deletes a map

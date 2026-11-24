@@ -21,6 +21,7 @@ from opentakserver.blueprints.ots_api.user_api import user_api_blueprint
 from opentakserver.blueprints.ots_api.video_api import video_api_blueprint
 from opentakserver.blueprints.ots_api.federation_api import federation_blueprint
 from opentakserver.blueprints.ots_api.taklab_recordings_api import taklab_recordings_api
+from opentakserver.blueprints.ots_api.taklab_journal_api import taklab_journal_api
 
 from .language_api import language_api
 from .ldap_api import ldap_blueprint
@@ -49,3 +50,4 @@ ots_api.register_blueprint(tak_gov_link_blueprint)
 ots_api.register_blueprint(language_api)
 ots_api.register_blueprint(federation_blueprint)
 ots_api.register_blueprint(taklab_recordings_api)
+ots_api.register_blueprint(taklab_journal_api)

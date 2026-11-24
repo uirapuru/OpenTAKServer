@@ -74,6 +74,7 @@ from opentakserver.models.Team import Team
 from opentakserver.models.VideoRecording import VideoRecording
 from opentakserver.models.VideoStream import VideoStream
 from opentakserver.models.TaklabRecording import TaklabRecording
+from opentakserver.models.TaklabJournal import TaklabJournal
 from opentakserver.models.WebAuthn import WebAuthn
 from opentakserver.models.ZMIST import ZMIST
 from opentakserver.models.CITrap import CITrap

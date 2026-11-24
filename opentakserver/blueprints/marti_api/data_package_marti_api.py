@@ -19,6 +19,7 @@ from flask_login import current_user
 from werkzeug.datastructures.file_storage import FileStorage
 from werkzeug.utils import secure_filename
 
+from opentakserver import taklab_journal
 from opentakserver.extensions import db, logger
 from opentakserver.functions import format_bytes, iso8601_string_from_datetime
 from opentakserver.models.DataPackage import DataPackage
@@ -227,6 +228,7 @@ def data_package_share():
                 jsonify({"success": False, "error": gettext("Failed to save the data package")}),
                 500,
             )
+        taklab_journal.record_data_package(file_hash)
 
         url = urlparse(request.url_root)
         return (
