@@ -73,6 +73,7 @@ from opentakserver.models.RBLine import RBLine
 from opentakserver.models.Team import Team
 from opentakserver.models.VideoRecording import VideoRecording
 from opentakserver.models.VideoStream import VideoStream
+from opentakserver.models.TaklabRecording import TaklabRecording
 from opentakserver.models.WebAuthn import WebAuthn
 from opentakserver.models.ZMIST import ZMIST
 from opentakserver.models.CITrap import CITrap
@@ -588,6 +589,11 @@ def main(app):
 
     create_default_groups(app)
     start_federation_connections(app)
+
+    # taklab: finalises videos, enforces retention and disk space of recordings
+    from opentakserver.taklab_recordings import start_janitor
+
+    start_janitor(app)
 
     try:
         socketio.run(

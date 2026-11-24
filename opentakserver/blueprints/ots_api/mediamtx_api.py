@@ -20,6 +20,7 @@ from flask_security.utils import parse_auth_token
 from sqlalchemy import update
 from werkzeug.datastructures import ImmutableMultiDict
 
+from opentakserver import taklab_recordings
 from opentakserver.config_helpers import public_video_port
 from opentakserver.extensions import db, ldap_manager, logger
 from opentakserver.forms.MediaMTXPathConfig import MediaMTXPathConfig
@@ -60,6 +61,32 @@ def mediamtx_webhook():
         return jsonify({"success": False, "error": gettext("Invalid token")}), 401
 
     event = bleach.clean(request.args.get("event"))
+
+    # taklab: with the recordings registry on, segments belong to it (one
+    # recording per continuous publication), not to video_recordings.
+    recordings = taklab_recordings.settings()
+    if recordings is not None and event in ("segment_record", "segment_record_complete"):
+        if event == "segment_record_complete":
+            try:
+                outcome = taklab_recordings.video_segment_complete(
+                    recordings,
+                    request.args.get("path", ""),
+                    request.args.get("segment_path", ""),
+                    request.args.get("segment_duration"),
+                )
+                logger.debug(f"taklab recordings: segment {outcome}")
+            except Exception as e:  # noqa: BLE001 - a hook must answer, MediaMTX only logs it
+                db.session.rollback()
+                logger.error(f"taklab recordings: segment hook failed: {e}")
+                logger.debug(traceback.format_exc())
+        return "", 200
+    if recordings is not None and event in ("ready", "notready"):
+        try:
+            taklab_recordings.video_activity(bleach.clean(request.args.get("path", "")))
+        except Exception as e:  # noqa: BLE001
+            db.session.rollback()
+            logger.error(f"taklab recordings: activity hook failed: {e}")
+
     if event == "init":
         rtsp_port = bleach.clean(request.args.get("rtsp_port"))
         path = bleach.clean(request.args.get("path"))
@@ -425,6 +452,20 @@ def delete_stream():
         return "", 200
 
 
+def taklab_may_publish(path, username) -> bool:
+    """taklab: with the recordings registry on, a path named after an account is that account's.
+
+    Recordings of a path are attributed to the account of the same name, so
+    nobody else may publish there (MediaMTX has overridePublisher: yes).
+    Other paths stay open to every account, as before.
+    """
+    if taklab_recordings.settings() is None or not path:
+        return True
+    name = str(path).split("/")[0]
+    owner = app.security.datastore.find_user(username=name)
+    return owner is None or owner.username == username
+
+
 # This is mainly for mediamtx authentication
 @mediamtx_api_blueprint.route("/api/external_auth", methods=["POST"])
 def external_auth():
@@ -489,6 +530,9 @@ def external_auth():
         auth_success = True
 
     if auth_success:
+        if action == "publish" and not taklab_may_publish(request.json.get("path"), username):
+            logger.warning("taklab: {} may not publish to another account's path".format(username))
+            return "", 401
         if action == "publish":
             logger.debug("Publish {}".format(request.json.get("path")))
             v = VideoStream()
