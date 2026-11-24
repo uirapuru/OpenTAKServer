@@ -31,7 +31,7 @@ import requests
 from cryptography.x509.oid import NameOID
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 from flask import current_app as app
-from flask_security import verify_password
+from flask_security import hash_password, verify_password
 from werkzeug.utils import secure_filename
 
 from opentakserver.blueprints.marti_api.marti_api import verify_client_cert
@@ -42,7 +42,10 @@ from opentakserver.models.MissionContent import MissionContent
 
 taklab_report_marti_api = Blueprint("taklab_report_marti_api", __name__)
 
-FORWARD_TIMEOUT = (5, 60)
+# Read timeout below the 30 s proxy_read_timeout of marti-tls, so the phone
+# gets our 503 with a Polish message instead of nginx's bare 504. Downloads
+# stream, so the limit applies to the first byte and to gaps between chunks.
+FORWARD_TIMEOUT = (5, 25)
 MAX_ORDER_BYTES = 64 * 1024
 MAX_FILE_BYTES = 5 * 1024 * 1024
 PASSED_STATUSES = {200, 202, 400, 404, 409, 429, 503}
@@ -91,7 +94,10 @@ def _account() -> tuple[str | None, Response | None]:
     cert = verify_client_cert()
     if not cert:
         return None, _error(MSG_CERT, 403)
-    username = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+    names = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+    username = names[0].value if names else None
+    if not username:
+        return None, _error(MSG_ACCOUNT, 403)
     user = app.security.datastore.find_user(username=username)
     if not user or not user.active:
         return None, _error(MSG_ACCOUNT, 403)
@@ -268,6 +274,16 @@ def internal_file(file_hash):
     return response
 
 
+_DUMMY_HASH: list[str] = []
+
+
+def _dummy_hash() -> str:
+    """A fixed hash made with this server's settings (computed once, needs the app)."""
+    if not _DUMMY_HASH:
+        _DUMMY_HASH.append(hash_password("taklab-report-dummy-password"))
+    return _DUMMY_HASH[0]
+
+
 @taklab_report_marti_api.route("/api/taklab/report/mission-password", methods=["POST"])
 def internal_mission_password():
     refusal = _internal_refusal()
@@ -280,5 +296,10 @@ def internal_mission_password():
     if not (isinstance(name, str) and isinstance(password, str) and name and password):
         return _reply({"ok": False}, 200)
     mission = db.session.execute(db.select(Mission).filter_by(name=name)).scalar()
-    ok = bool(mission is not None and mission.password and verify_password(password, mission.password))
+    if mission is None or not mission.password:
+        # Same work as a real check, so the answer time does not reveal
+        # whether a password-protected mission of that name exists.
+        verify_password(password, _dummy_hash())
+        return _reply({"ok": False}, 200)
+    ok = bool(verify_password(password, mission.password))
     return _reply({"ok": ok}, 200)

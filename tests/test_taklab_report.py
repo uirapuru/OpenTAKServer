@@ -123,6 +123,35 @@ def test_unknown_or_inactive_account_403(app, client, report_env, cert_user, ups
     assert upstream.calls == []
 
 
+def test_cert_without_common_name_403(app, client, report_env, cert_user, upstream, monkeypatch):
+    def cert_without_cn():
+        cert = MagicMock()
+        cert.subject.get_attributes_for_oid.return_value = []
+        return cert
+
+    monkeypatch.setattr(importlib.import_module(MODULE), "verify_client_cert", cert_without_cn)
+    assert _order(client).status_code == 403
+    assert client.get("/Marti/api/taklab/report").status_code == 403
+    assert upstream.calls == []
+
+
+def test_client_sent_report_headers_are_overwritten(app, client, report_env, cert_user, upstream):
+    _user(app)
+    upstream.status = 200
+    upstream.body = {"items": []}
+    client.get("/Marti/api/taklab/report", headers={"X-Report-User": "admin", "X-Report-Token": "zly"})
+    client.post("/Marti/api/taklab/report", data=json.dumps(ORDER), content_type="application/json",
+                headers={"X-Report-User": "admin"})
+    for call in upstream.calls:
+        assert call["headers"]["X-Report-User"] == "alice"
+        assert call["headers"]["X-Report-Token"] == TOKEN
+
+
+def test_forward_read_timeout_below_nginx_30s():
+    connect, read = importlib.import_module(MODULE).FORWARD_TIMEOUT
+    assert read <= 25
+
+
 def test_report_forwards_account_from_cert(app, client, report_env, cert_user, upstream):
     _user(app)
     res = _order(client)
@@ -370,3 +399,19 @@ def test_mission_password_check(app, client, report_env, caplog):
         assert _check(client, ["nie", "slownik"]).json == {"ok": False}
     assert "TAJNE-HASLO" not in caplog.text
     assert _check(client, {"name": "Ćwiczenie", "password": "TAJNE-HASLO"}, token="zly").status_code == 404
+
+
+def test_unknown_mission_still_verifies_a_hash(app, client, report_env, monkeypatch):
+    module = importlib.import_module(MODULE)
+    calls = []
+    real = module.verify_password
+
+    def counting(password, hashed):
+        calls.append(password)
+        return real(password, hashed)
+
+    monkeypatch.setattr(module, "verify_password", counting)
+    _mission(app, "Otwarta")
+    assert _check(client, {"name": "Nie ma", "password": "p1"}).json == {"ok": False}
+    assert _check(client, {"name": "Otwarta", "password": "p2"}).json == {"ok": False}
+    assert calls == ["p1", "p2"]
