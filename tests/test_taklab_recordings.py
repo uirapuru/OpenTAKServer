@@ -209,6 +209,8 @@ def test_znacznik_cot_bez_tokenu_do_grup_autora(client, world):
     assert float(point.get("lat")) == pytest.approx(52.0)
     detail = event.find("detail")
     assert detail.find("archive") is not None
+    link = detail.find("link")
+    assert link.attrib == {"uid": f"rec:{rec_id}", "relation": "r-u", "type": "taklab-recording"}
     marker = detail.find("__taklab_recording")
     assert marker.get("id") == rec_id and marker.get("kind") == "voice"
     remarks = detail.find("remarks").text

@@ -457,6 +457,9 @@ def marker_event(rec: TaklabRecording, config: Settings, now: datetime | None = 
     SubElement(detail, "contact", {"callsign": title[:120]})
     SubElement(detail, "remarks").text = marker_remarks(rec, config)
     SubElement(detail, "archive")
+    # Numer nagrania: <link> czyta node-cot (CloudTAK, properties.links),
+    # element wlasny niesie tez rodzaj. Zaden z nich nie ma adresu pliku.
+    SubElement(detail, "link", {"uid": f"rec:{rec.id}", "relation": "r-u", "type": "taklab-recording"})
     SubElement(detail, "__taklab_recording", {"id": rec.id, "kind": rec.kind})
     return tostring(event).decode("utf-8")
 
