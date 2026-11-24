@@ -3,7 +3,8 @@
 Konto ustalamy z certyfikatu klienta (marti-tls przekazuje go w X-Ssl-Cert).
 Sekcja "voice" albo "video" jest null, gdy środowisko nie ma tej funkcji
 (brak hosta albo portu), a {"error": ...}, gdy token konta nie nadaje się
-na hasło. Odpowiedzi z tokenem nie wolno buforować ani zapisywać w dzienniku.
+na hasło. Sekcja "ocr" to {"maxBytes": N} albo null, gdy środowisko nie
+ma rozpoznawania tekstu. Odpowiedzi z tokenem nie wolno buforować ani zapisywać w dzienniku.
 """
 
 import hashlib
@@ -16,6 +17,7 @@ from flask import current_app as app
 from flask import jsonify
 
 from opentakserver.blueprints.marti_api.marti_api import verify_client_cert
+from opentakserver.blueprints.marti_api.taklab_ocr_marti_api import config_section as ocr_config_section
 from opentakserver.extensions import logger
 from opentakserver.taklab_enrollment_token import enrollment_token
 
@@ -100,7 +102,8 @@ def taklab_config():
             "username": username, "token": token,
         }
 
-    body = {"server": host, "account": username, "voice": voice, "video": video}
+    body = {"server": host, "account": username, "voice": voice, "video": video,
+            "ocr": ocr_config_section()}
     body["version"] = hashlib.sha256(
         json.dumps(body, sort_keys=True).encode()
     ).hexdigest()[:16]
