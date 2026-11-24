@@ -68,7 +68,6 @@ from opentakserver.models.TaklabRecording import (
     TaklabRecording,
 )
 
-ANON_GROUP = "__ANON__"
 CLOUDTAK_UID_PREFIX = "ANDROID-CloudTAK-"
 MARKER_PREFIX = "taklab-recording-"
 MARKER_TYPES = {"video": "b-i-v", "voice": "b-i-x-i", "scan": "b-i-x-i"}
@@ -195,63 +194,14 @@ def is_admin(user) -> bool:
     return bool(user) and user.has_role("administrator")
 
 
-def _group_rows(user_id: int, direction: str):
-    from opentakserver.models.Group import Group
-    from opentakserver.models.GroupUser import GroupUser
-
-    return db.session.execute(
-        select(GroupUser.group_id, Group.name)
-        .join(Group, Group.id == GroupUser.group_id)
-        .where(
-            GroupUser.user_id == user_id,
-            GroupUser.direction == direction,
-            GroupUser.enabled.is_(True),
-        )
-    ).all()
-
-
-def audible_accounts(viewer) -> set[str]:
-    """Accounts whose CoT reaches the viewer - and so whose recordings they see."""
-    from opentakserver.models.GroupUser import GroupUser
-    from opentakserver.models.user import User
-
-    out_rows = _group_rows(viewer.id, "OUT")
-    receive_ids = {row[0] for row in out_rows}
-    receives_anon = not receive_ids or ANON_GROUP in {row[1] for row in out_rows}
-
-    accounts = {viewer.username}
-    if receive_ids:
-        rows = db.session.execute(
-            select(User.username)
-            .join(GroupUser, GroupUser.user_id == User.id)
-            .where(
-                GroupUser.direction == "IN",
-                GroupUser.enabled.is_(True),
-                GroupUser.group_id.in_(receive_ids),
-            )
-        ).all()
-        accounts.update(row[0] for row in rows)
-    if receives_anon:
-        senders = select(GroupUser.user_id).where(
-            GroupUser.direction == "IN", GroupUser.enabled.is_(True)
-        )
-        rows = db.session.execute(select(User.username).where(User.id.not_in(senders))).all()
-        accounts.update(row[0] for row in rows)
-    return accounts
-
-
 def can_see(viewer, rec: TaklabRecording) -> bool:
-    if rec.deleted:
-        return False
-    if is_admin(viewer):
-        return True
-    if not rec.account or find_user(rec.account) is None:
-        return False
-    return rec.account in audible_accounts(viewer)
+    # User decision 24 XI 2026: recordings are for administrators only (list,
+    # playback, download, rename, delete). Map markers still go to the author's groups.
+    return not rec.deleted and is_admin(viewer)
 
 
 def can_manage(viewer, rec: TaklabRecording) -> bool:
-    return is_admin(viewer) or (bool(rec.account) and rec.account == viewer.username)
+    return is_admin(viewer)
 
 
 # --- positions ---------------------------------------------------------------

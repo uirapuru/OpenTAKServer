@@ -179,7 +179,7 @@ def test_glosowka_dostaje_konto_znak_pozycje_i_slad(client, world, app):
     assert body["uid"] == "ANDROID-alice"
     assert (body["lat"], body["lon"]) == (52.0, 21.0)
     assert body["duration_s"] == 40.0
-    as_user(world, "alice")
+    as_user(world, "admin")
     detail = client.get(f"/api/taklab/recordings/{body['id']}").json
     assert detail["text"] == "Jestem na pozycji"
     assert [p[:2] for p in detail["track"]] == [[52.001, 21.001]]
@@ -226,7 +226,7 @@ def test_bez_pozycji_nie_ma_znacznika(client, world):
 
 def test_usuniecie_wysyla_forcedelete(client, world):
     rec_id = ingest(client, author="Alfa (alice)").json["id"]
-    as_user(world, "alice")
+    as_user(world, "admin")
     assert client.delete(f"/api/taklab/recordings/{rec_id}").status_code == 200
     xml, author = world["sent"][-1]
     event = ET.fromstring(xml)
@@ -245,59 +245,51 @@ def _ids(client):
     return {item["id"] for item in res.json["items"]}
 
 
-def test_widzi_grupa_autora_nie_widzi_inna_strona(client, world):
+def test_nagrania_tylko_dla_administratora(client, world):
+    """Decyzja usera z 24 XI 2026: autor ani jego grupa nie widzą nagrań, tylko administrator."""
+    rec_id = ingest(client, author="Alfa (alice)").json["id"]
+    for name in ("alice", "bob", "carol", "erin"):
+        as_user(world, name)
+        for res in (
+            client.get("/api/taklab/recordings"),
+            client.get("/api/taklab/recordings/usage"),
+            client.get(f"/api/taklab/recordings/{rec_id}"),
+            client.get(f"/api/taklab/recordings/{rec_id}/file"),
+            client.get(f"/api/taklab/recordings/archive?ids={rec_id}"),
+            client.get("/api/taklab/recordings/archive?all=1"),
+            client.patch(f"/api/taklab/recordings/{rec_id}", json={"name": "x"}),
+            client.delete(f"/api/taklab/recordings/{rec_id}"),
+        ):
+            assert res.status_code == 403, (name, res.request.path, res.status_code)
+            assert res.json["error"] == "Nagrania są dostępne tylko dla administratora."
+    as_user(world, "admin")
+    listing = client.get("/api/taklab/recordings").json
+    assert {i["id"] for i in listing["items"]} == {rec_id} and listing["admin"] is True
+    assert listing["items"][0]["can_manage"] is True
+
+
+def test_admin_widzi_wszystkie_takze_skasowanego_konta(client, world):
     alice = ingest(client, author="Alfa (alice)").json["id"]
     carol = ingest(client, account="carol").json["id"]
-    dave = ingest(client, account="dave").json["id"]
-    as_user(world, "bob")
-    assert _ids(client) == {alice}
-    as_user(world, "carol")
-    assert _ids(client) == {carol}
-    assert client.get(f"/api/taklab/recordings/{alice}").status_code == 404
-    assert client.get(f"/api/taklab/recordings/{alice}/file").status_code == 404
-    as_user(world, "erin")  # bez grup = __ANON__, słyszy innych bez grup
-    assert _ids(client) == {dave}
-    as_user(world, "admin")
-    assert _ids(client) == {alice, carol, dave}
-
-
-def test_wylaczona_grupa_out_nie_daje_wgladu(client, world, app):
-    alice = ingest(client, author="Alfa (alice)").json["id"]
-    make_user(app, "frank")
-    join(app, "frank", "niebiescy", "OUT", enabled=False)
-    as_user(world, "frank")
-    assert alice not in _ids(client)
-
-
-def test_nagranie_skasowanego_konta_tylko_dla_admina(client, world):
     ghost = ingest(client, account="nieistnieje").json["id"]
-    as_user(world, "erin")
-    assert ghost not in _ids(client)
     as_user(world, "admin")
-    assert ghost in _ids(client)
+    assert _ids(client) == {alice, carol, ghost}
 
 
-def test_zmiana_nazwy_i_usuwanie_tylko_autor_albo_admin(client, world):
+def test_zmiana_nazwy_i_usuwanie_przez_administratora(client, world):
     rec_id = ingest(client, author="Alfa (alice)").json["id"]
-    as_user(world, "bob")
-    item = client.get(f"/api/taklab/recordings/{rec_id}").json
-    assert item["can_manage"] is False and item["can_edit"] is False
-    assert client.patch(f"/api/taklab/recordings/{rec_id}", json={"name": "x"}).status_code == 403
-    assert client.delete(f"/api/taklab/recordings/{rec_id}").status_code == 403
-    as_user(world, "alice")
+    as_user(world, "admin")
     res = client.patch(f"/api/taklab/recordings/{rec_id}", json={"name": "  Meldunek   rano "})
     assert res.status_code == 200 and res.json["name"] == "Meldunek rano"
     assert client.patch(f"/api/taklab/recordings/{rec_id}", json={"name": "  "}).status_code == 400
-    as_user(world, "admin")
     assert client.delete(f"/api/taklab/recordings/{rec_id}").status_code == 200
     assert client.get(f"/api/taklab/recordings/{rec_id}").status_code == 404
 
 
-def test_bez_logowania_401_a_zajetosc_tylko_admin(client, world):
+def test_bez_logowania_401_a_zajetosc_dla_admina(client, world):
     as_user(world, None)
     assert client.get("/api/taklab/recordings").status_code == 401
-    as_user(world, "alice")
-    assert client.get("/api/taklab/recordings/usage").status_code == 403
+    assert client.get("/api/taklab/recordings/archive?all=1").status_code == 401
     ingest(client, author="Alfa (alice)")
     as_user(world, "admin")
     usage = client.get("/api/taklab/recordings/usage").json
@@ -322,7 +314,7 @@ def test_filtry_listy(client, world):
     old = ingest(client, author="Alfa (alice)", started_at=(t0 - timedelta(days=2)).isoformat()).json["id"]
     new = ingest(client, kind="scan", data=JPEG, mime="image/jpeg", account="alice",
                  started_at=t0.isoformat()).json["id"]
-    as_user(world, "alice")
+    as_user(world, "admin")
     assert {i["id"] for i in client.get("/api/taklab/recordings?kind=scan").json["items"]} == {new}
     # Format z JS toISOString(), jak wysyła panel OTS
     since = (t0 - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -340,7 +332,7 @@ def test_filtry_listy(client, world):
 def test_plik_z_range(client, world):
     data = OGG + bytes(range(256)) * 4
     rec_id = ingest(client, data=data, author="Alfa (alice)").json["id"]
-    as_user(world, "alice")
+    as_user(world, "admin")
     full = client.get(f"/api/taklab/recordings/{rec_id}/file")
     assert full.status_code == 200 and full.data == data and full.mimetype == "audio/ogg"
     part = client.get(f"/api/taklab/recordings/{rec_id}/file", headers={"Range": "bytes=4-13"})
@@ -356,9 +348,78 @@ def test_plik_usunietego_nagrania_znika_z_dysku(client, world, rec_env):
     rec_id = ingest(client, author="Alfa (alice)").json["id"]
     files = [p for p in rec_env.rglob("*.ogg")]
     assert len(files) == 1
-    as_user(world, "alice")
+    as_user(world, "admin")
     client.delete(f"/api/taklab/recordings/{rec_id}")
     assert not files[0].exists()
+
+
+# --- archiwum ZIP -------------------------------------------------------------
+
+
+def _zip(res):
+    import zipfile
+
+    assert res.status_code == 200, res.text
+    assert res.mimetype == "application/zip"
+    assert res.headers["Content-Disposition"].startswith('attachment; filename="nagrania-')
+    return zipfile.ZipFile(io.BytesIO(res.data))
+
+
+def test_archiwum_wybranych_z_nazwami_po_zmianie(client, world):
+    t0 = world["t0"].replace(microsecond=0)
+    one = ingest(client, author="Alfa (alice)", started_at=t0.isoformat(), data=OGG + b"1").json["id"]
+    two = ingest(client, kind="scan", data=JPEG, mime="image/jpeg", account="carol",
+                 started_at=t0.isoformat()).json["id"]
+    ingest(client, account="dave", data=OGG + b"3")
+    as_user(world, "admin")
+    client.patch(f"/api/taklab/recordings/{one}", json={"name": 'Meldunek: "rano"/las'})
+    client.patch(f"/api/taklab/recordings/{two}", json={"name": "Meldunek: \"rano\"/las"})
+    archive = _zip(client.get(f"/api/taklab/recordings/archive?ids={one},{two}"))
+    stamp = t0.strftime("%Y%m%d-%H%M%S")
+    names = sorted(archive.namelist())
+    assert names == sorted([f"Meldunek_ _rano_las_{stamp}.ogg", f"Meldunek_ _rano_las_{stamp}.jpg"])
+    assert archive.read(f"Meldunek_ _rano_las_{stamp}.ogg") == OGG + b"1"
+    assert archive.read(f"Meldunek_ _rano_las_{stamp}.jpg") == JPEG
+    assert archive.testzip() is None
+
+
+def test_archiwum_wszystkich_z_filtrem_i_jednakowe_nazwy(client, world):
+    t0 = world["t0"].replace(microsecond=0)
+    for data in (OGG + b"a", OGG + b"b"):
+        ingest(client, account="alice", started_at=t0.isoformat(), data=data, name="Raport")
+    ingest(client, kind="scan", data=JPEG, mime="image/jpeg", account="alice")
+    as_user(world, "admin")
+    archive = _zip(client.get("/api/taklab/recordings/archive?all=1&kind=voice"))
+    stamp = t0.strftime("%Y%m%d-%H%M%S")
+    assert sorted(archive.namelist()) == [f"Raport_{stamp} (2).ogg", f"Raport_{stamp}.ogg"]
+    assert {archive.read(n) for n in archive.namelist()} == {OGG + b"a", OGG + b"b"}
+    everything = _zip(client.get("/api/taklab/recordings/archive?all=1"))
+    assert len(everything.namelist()) == 3
+
+
+def test_archiwum_pomija_brakujace_pliki_i_usuniete(client, world, rec_env):
+    keep = ingest(client, account="alice", data=OGG + b"k").json["id"]
+    gone = ingest(client, account="bob", data=OGG + b"g").json["id"]
+    deleted = ingest(client, account="carol").json["id"]
+    as_user(world, "admin")
+    client.delete(f"/api/taklab/recordings/{deleted}")
+    for path in rec_env.rglob("*.ogg"):
+        if path.read_bytes() == OGG + b"g":
+            path.unlink()
+    archive = _zip(client.get(f"/api/taklab/recordings/archive?ids={keep},{gone},{deleted}"))
+    names = archive.namelist()
+    assert len(names) == 2 and "pominiete.txt" in names
+    assert archive.read("pominiete.txt").decode().count(".ogg") == 1
+    assert client.get(f"/api/taklab/recordings/archive?ids={gone}").status_code == 404
+
+
+def test_archiwum_odrzuca_zle_zadania(client, world):
+    as_user(world, "admin")
+    assert client.get("/api/taklab/recordings/archive").status_code == 400
+    many = ",".join(f"id{n}" for n in range(101))
+    assert client.get(f"/api/taklab/recordings/archive?ids={many}").status_code == 400
+    assert client.get("/api/taklab/recordings/archive?all=1&kind=film").status_code == 400
+    assert client.get("/api/taklab/recordings/archive?all=1").status_code == 404
 
 
 # --- wideo z MediaMTX ---------------------------------------------------------

@@ -10,9 +10,17 @@ with "Authorization: Bearer <environment secret>". It is refused whenever the
 request came through a proxy (X-Forwarded-For / X-Real-IP): the panel route
 (Traefik -> ots-ui nginx -> 8081) always adds them, the in-cluster callers
 never do. marti-tls does not route /ingest at all.
+
+Access (user decision 24 XI 2026): every route except /ingest is for the
+administrator role only - list, details, playback, download, ZIP archive,
+rename and delete. Other accounts get 403. Map markers are not affected.
 """
 
+import io
 import os
+import re
+import zipfile
+from datetime import datetime, timezone
 
 import requests
 from cryptography.x509.oid import NameOID
@@ -35,8 +43,12 @@ MAX_NAME = 200
 MSG_AUTH = "Wymagane logowanie."
 MSG_OFF = "Rejestr nagrań nie jest włączony na tym serwerze."
 MSG_NOT_FOUND = "Nie ma takiego nagrania."
-MSG_FORBIDDEN = "Nagranie może zmienić albo usunąć tylko autor albo administrator."
-MSG_ADMIN = "Zajętość widzi tylko administrator."
+MSG_ADMIN = "Nagrania są dostępne tylko dla administratora."
+MSG_NOTHING = "Nie ma plików do pobrania."
+MSG_TOO_MANY = "Za dużo nagrań w jednym archiwum."
+MAX_ARCHIVE_IDS = 100
+MAX_ARCHIVE_ALL = 5000
+ARCHIVE_CHUNK = 256 * 1024
 MSG_FILE = "Plik nagrania jest niedostępny."
 MSG_IN_PROGRESS = "Nagranie jeszcze trwa, plik będzie gotowy po zakończeniu."
 
@@ -71,6 +83,8 @@ def _setup():
     viewer = _viewer()
     if viewer is None:
         return None, None, _error(MSG_AUTH, 401)
+    if not rec_core.is_admin(viewer):
+        return None, None, _error(MSG_ADMIN, 403)
     return config, viewer, None
 
 
@@ -81,21 +95,13 @@ def _visible(viewer, rec_id: str):
     return rec
 
 
-@taklab_recordings_api.route("/api/taklab/recordings", methods=["GET"])
-def list_recordings():
-    config, viewer, refusal = _setup()
-    if refusal:
-        return refusal
+def _filtered_query():
+    """Recordings matching the list filters (kind, account, from, to)."""
     query = select(TaklabRecording).where(TaklabRecording.deleted.is_(False))
-    admin = rec_core.is_admin(viewer)
-    if not admin:
-        # Existing accounts only: recordings of deleted authors are for administrators.
-        accounts = rec_core.audible_accounts(viewer)
-        query = query.where(TaklabRecording.account.in_(accounts))
     kind = request.args.get("kind")
     if kind:
         if kind not in KINDS:
-            return _error("Nieznany rodzaj nagrania.", 400)
+            return None, _error("Nieznany rodzaj nagrania.", 400)
         query = query.where(TaklabRecording.kind == kind)
     account = (request.args.get("account") or "").strip()
     if account:
@@ -106,9 +112,20 @@ def list_recordings():
             continue
         moment = rec_core.parse_time(raw)
         if moment is None:
-            return _error(f"Nieprawidłowa data w polu {key}.", 400)
+            return None, _error(f"Nieprawidłowa data w polu {key}.", 400)
         column = TaklabRecording.started_at
         query = query.where(column >= moment if compare == "ge" else column <= moment)
+    return query, None
+
+
+@taklab_recordings_api.route("/api/taklab/recordings", methods=["GET"])
+def list_recordings():
+    config, viewer, refusal = _setup()
+    if refusal:
+        return refusal
+    query, refusal = _filtered_query()
+    if refusal:
+        return refusal
     try:
         page = max(1, int(request.args.get("page", 1)))
         per_page = min(MAX_PER_PAGE, max(1, int(request.args.get("per_page", PER_PAGE))))
@@ -132,7 +149,7 @@ def list_recordings():
             "current_page": page,
             "per_page": per_page,
             "total_pages": max(1, -(-total // per_page)),
-            "admin": admin,
+            "admin": True,
             "enabled": True,
         }
     )
@@ -143,8 +160,6 @@ def recordings_usage():
     config, viewer, refusal = _setup()
     if refusal:
         return refusal
-    if not rec_core.is_admin(viewer):
-        return _error(MSG_ADMIN, 403)
     return _reply(rec_core.usage(config))
 
 
@@ -159,8 +174,6 @@ def one_recording(rec_id):
     manage = rec_core.can_manage(viewer, rec)
     if request.method == "GET":
         return _reply(rec.to_detail_json(manage))
-    if not manage:
-        return _error(MSG_FORBIDDEN, 403)
     if request.method == "DELETE":
         rec_core.delete_recording(rec, config, f"by {viewer.username}")
         return _reply({"success": True})
@@ -227,6 +240,114 @@ def recording_file(rec_id):
         max_age=0,
     )
     response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+_UNSAFE = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]+')
+
+
+def _archive_name(rec: TaklabRecording, suffix: str, taken: set[str]) -> str:
+    """'<name>_<YYYYmmdd-HHMMSS><suffix>', safe on Windows, unique in the archive."""
+    stamp = rec.started_at.strftime("%Y%m%d-%H%M%S") if rec.started_at else "bez-daty"
+    base = _UNSAFE.sub("_", (rec.name or "").strip()).strip(" ._")[:120] or rec.kind
+    stem = f"{base}_{stamp}"
+    name = f"{stem}{suffix}"
+    number = 2
+    while name.lower() in taken:
+        name = f"{stem} ({number}){suffix}"
+        number += 1
+    taken.add(name.lower())
+    return name
+
+
+class _Sink(io.RawIOBase):
+    """Write-only, non-seekable buffer: zipfile streams into it, we drain it."""
+
+    def __init__(self):
+        super().__init__()
+        self._chunks: list[bytes] = []
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, data) -> int:
+        self._chunks.append(bytes(data))
+        return len(data)
+
+    def take(self) -> bytes:
+        out = b"".join(self._chunks)
+        self._chunks.clear()
+        return out
+
+
+def _zip_stream(entries: list[tuple], skipped: list[str]):
+    sink = _Sink()
+    with zipfile.ZipFile(sink, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
+        for path, arcname, moment in entries:
+            info = zipfile.ZipInfo(arcname, date_time=moment)
+            info.compress_type = zipfile.ZIP_STORED
+            try:
+                with path.open("rb") as source, archive.open(info, "w", force_zip64=True) as target:
+                    while chunk := source.read(ARCHIVE_CHUNK):
+                        target.write(chunk)
+                        yield sink.take()
+            except OSError as e:
+                # Deleted by the janitor while we were streaming: say so in the archive.
+                logger.warning(f"taklab recordings: archive skips {arcname} ({type(e).__name__})")
+                skipped.append(arcname)
+            yield sink.take()
+        if skipped:
+            note = "Tych nagrań nie było w archiwum (nagranie trwa albo plik jest niedostępny):\n"
+            archive.writestr("pominiete.txt", note + "\n".join(skipped) + "\n")
+    yield sink.take()
+
+
+@taklab_recordings_api.route("/api/taklab/recordings/archive", methods=["GET"])
+def recordings_archive():
+    """ZIP of chosen recordings: ?ids=a,b,c (up to 100), or ?all=1 with the list filters."""
+    config, viewer, refusal = _setup()
+    if refusal:
+        return refusal
+    raw_ids = [part for part in (request.args.get("ids") or "").split(",") if part.strip()]
+    if raw_ids:
+        if len(raw_ids) > MAX_ARCHIVE_IDS:
+            return _error(MSG_TOO_MANY, 400)
+        ids = {part.strip() for part in raw_ids if len(part.strip()) <= 36}
+        query = select(TaklabRecording).where(
+            TaklabRecording.deleted.is_(False), TaklabRecording.id.in_(ids)
+        )
+    elif request.args.get("all") in ("1", "true"):
+        query, refusal = _filtered_query()
+        if refusal:
+            return refusal
+    else:
+        return _error("Wybierz nagrania albo wszystkie.", 400)
+    rows = db.session.execute(
+        query.order_by(TaklabRecording.started_at, TaklabRecording.id).limit(MAX_ARCHIVE_ALL + 1)
+    ).scalars().all()
+    if len(rows) > MAX_ARCHIVE_ALL:
+        return _error(MSG_TOO_MANY, 400)
+
+    entries, skipped, taken = [], [], {"pominiete.txt"}
+    for rec in rows:
+        path = rec_core.absolute(config, rec.file_path)
+        suffix = path.suffix if path is not None else ""
+        arcname = _archive_name(rec, suffix, taken)
+        if path is None or not path.is_file():
+            skipped.append(arcname)
+            continue
+        local = rec_core._local(rec.started_at or datetime(1980, 1, 2), config)
+        stamp = max(local.timetuple()[:6], (1980, 1, 1, 0, 0, 0))
+        entries.append((path, arcname, stamp))
+    if not entries:
+        return _error(MSG_NOTHING, 404)
+
+    logger.info(f"taklab recordings: {viewer.username} downloads {len(entries)} recordings as ZIP")
+    filename = datetime.now(timezone.utc).strftime("nagrania-%Y%m%d-%H%M%S.zip")
+    response = Response(stream_with_context(_zip_stream(entries, skipped)), mimetype="application/zip")
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-Accel-Buffering"] = "no"
     return response
 
 
