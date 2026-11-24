@@ -2026,6 +2026,8 @@ def mission_contents(mission_name: str | None = None, mission_guid: str | None =
         )
 
     mission = mission[0]
+    # Trasa po GUID nie niesie nazwy, a powiązania, zmiany i kolejka misji idą po nazwie
+    mission_name = mission.name
 
     if "hashes" in body:
         for content_hash in body["hashes"]:
