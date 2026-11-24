@@ -15,6 +15,7 @@ from opentakserver.blueprints.marti_api.marti_api import marti_api
 from opentakserver.blueprints.marti_api.mission_marti_api import mission_marti_api
 from opentakserver.blueprints.marti_api.taklab_config_marti_api import taklab_config_marti_api
 from opentakserver.blueprints.marti_api.taklab_ocr_marti_api import taklab_ocr_marti_api
+from opentakserver.blueprints.marti_api.taklab_report_marti_api import taklab_report_marti_api
 from opentakserver.blueprints.marti_api.video_marti_api import video_marti_api
 
 marti_blueprint = Blueprint("marti_blueprint", __name__)
@@ -31,3 +32,4 @@ marti_blueprint.register_blueprint(contacts_api)
 marti_blueprint.register_blueprint(video_marti_api)
 marti_blueprint.register_blueprint(taklab_config_marti_api)
 marti_blueprint.register_blueprint(taklab_ocr_marti_api)
+marti_blueprint.register_blueprint(taklab_report_marti_api)
