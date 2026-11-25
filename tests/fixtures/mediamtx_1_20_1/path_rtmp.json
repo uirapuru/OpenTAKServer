@@ -1,0 +1,34 @@
+{
+    "name": "rtmpcam",
+    "confName": "all_others",
+    "ready": true,
+    "readyTime": "2026-11-25T14:59:09.543246593Z",
+    "available": true,
+    "availableTime": "2026-11-25T14:59:09.543246593Z",
+    "online": true,
+    "onlineTime": "2026-11-25T14:59:09.543248216Z",
+    "source": {
+        "type": "rtmpConn",
+        "id": "f6cfb20e-77ea-40f3-9d8c-5a30880b7eab"
+    },
+    "tracks": [
+        "H264"
+    ],
+    "tracks2": [
+        {
+            "codec": "H264",
+            "codecProps": {
+                "width": 640,
+                "height": 360,
+                "profile": "High",
+                "level": "3"
+            }
+        }
+    ],
+    "readers": [],
+    "inboundBytes": 493653,
+    "outboundBytes": 0,
+    "inboundFramesInError": 0,
+    "bytesReceived": 493653,
+    "bytesSent": 0
+}

@@ -1,0 +1,15 @@
+{
+    "id": "f6cfb20e-77ea-40f3-9d8c-5a30880b7eab",
+    "created": "2026-11-25T14:59:06.318976507Z",
+    "remoteAddr": "127.0.0.1:45210",
+    "state": "publish",
+    "path": "rtmpcam",
+    "query": "",
+    "user": "",
+    "userAgent": "FMLE/3.0 (compatible; Lavf62.12.102)",
+    "inboundBytes": 1223000,
+    "outboundBytes": 3467,
+    "outboundFramesDiscarded": 0,
+    "bytesReceived": 1223000,
+    "bytesSent": 3467
+}

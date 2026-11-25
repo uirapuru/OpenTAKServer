@@ -1,0 +1,47 @@
+{
+    "name": "operator",
+    "confName": "all_others",
+    "ready": true,
+    "readyTime": "2026-11-25T14:58:27.437948712Z",
+    "available": true,
+    "availableTime": "2026-11-25T14:58:27.437948712Z",
+    "online": true,
+    "onlineTime": "2026-11-25T14:58:27.437949944Z",
+    "source": {
+        "type": "rtspSession",
+        "id": "3a7ae732-8398-402f-948e-974477d3e843"
+    },
+    "tracks": [
+        "H264",
+        "MPEG-4 Audio"
+    ],
+    "tracks2": [
+        {
+            "codec": "H264",
+            "codecProps": {
+                "width": 1280,
+                "height": 720,
+                "profile": "High",
+                "level": "3.1"
+            }
+        },
+        {
+            "codec": "MPEG-4 Audio",
+            "codecProps": {
+                "sampleRate": 44100,
+                "channelCount": 1
+            }
+        }
+    ],
+    "readers": [
+        {
+            "type": "rtspSession",
+            "id": "c08e83ef-ec3b-481a-8677-8cfce1327834"
+        }
+    ],
+    "inboundBytes": 26604049,
+    "outboundBytes": 20242370,
+    "inboundFramesInError": 0,
+    "bytesReceived": 26604049,
+    "bytesSent": 20242370
+}

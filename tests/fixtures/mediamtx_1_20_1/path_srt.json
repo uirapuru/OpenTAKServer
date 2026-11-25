@@ -1,0 +1,34 @@
+{
+    "name": "srtcam",
+    "confName": "all_others",
+    "ready": true,
+    "readyTime": "2026-11-25T14:59:07.550566195Z",
+    "available": true,
+    "availableTime": "2026-11-25T14:59:07.550566195Z",
+    "online": true,
+    "onlineTime": "2026-11-25T14:59:07.550567417Z",
+    "source": {
+        "type": "srtConn",
+        "id": "6e319630-c7ea-4c77-9278-96c3027022dd"
+    },
+    "tracks": [
+        "H264"
+    ],
+    "tracks2": [
+        {
+            "codec": "H264",
+            "codecProps": {
+                "width": 640,
+                "height": 360,
+                "profile": "High",
+                "level": "3"
+            }
+        }
+    ],
+    "readers": [],
+    "inboundBytes": 493653,
+    "outboundBytes": 0,
+    "inboundFramesInError": 0,
+    "bytesReceived": 493653,
+    "bytesSent": 0
+}
