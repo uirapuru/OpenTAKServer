@@ -1,16 +1,16 @@
+import datetime
+import hmac
 import os
 import traceback
 from urllib.parse import unquote, urlparse
 
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.exceptions import InvalidSignature
 from flask import Blueprint
 from flask import current_app as app
 from flask import jsonify, request, send_from_directory
 from flask_babel import gettext
 from cryptography import x509
 from cryptography.x509 import UnsupportedGeneralNameType
-from cryptography.x509.verification import VerificationError
 from simplekml import Document, GxMultiTrack, GxTrack, Icon, IconStyle, Kml, Style
 
 import opentakserver
@@ -21,6 +21,44 @@ from opentakserver.models.EUD import EUD
 from opentakserver.models.Point import Point
 
 marti_api = Blueprint("marti_api", __name__)
+
+
+# Taklab: the certificate in X-Ssl-Cert is public data. Anyone who knows the PEM
+# of a CA-signed certificate and reaches port 8081 past nginx (another pod in the
+# namespace, the api NodePort, the tailnet) used to act as its owner. The header
+# now counts only together with a secret that only the TLS-terminating proxy
+# (marti-tls) and this process know. The secret lives in a file named by
+# OTS_SSL_CERT_PROXY_TOKEN_FILE and is read from the environment on purpose, not
+# from app.config, so it never lands in config.yml.
+PROXY_TOKEN_HEADER = "X-Taklab-Proxy-Token"
+
+
+def _proxy_token() -> str | None:
+    """None = no proxy secret configured (upstream behaviour); "" = configured but
+    unusable, which refuses every forwarded certificate."""
+    path = os.environ.get("OTS_SSL_CERT_PROXY_TOKEN_FILE")
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf8") as f:
+            return f.read().strip()
+    except OSError as e:
+        logger.error(f"Cannot read the proxy token file {path}: {e}")
+        return ""
+
+
+def _proxy_token_ok() -> bool:
+    expected = _proxy_token()
+    if expected is None:
+        return True
+    given = request.headers.get(PROXY_TOKEN_HEADER, "")
+    if not expected or not hmac.compare_digest(given.encode(), expected.encode()):
+        logger.warning(
+            f"Ignoring {app.config.get('OTS_SSL_CERT_HEADER')} from {request.remote_addr}: "
+            "missing or wrong proxy token"
+        )
+        return False
+    return True
 
 
 # Verifies the client cert forwarded by nginx in the X-Ssl-Cert header
@@ -34,19 +72,22 @@ def verify_client_cert() -> x509.Certificate | None:
     if not cert:
         return None
 
-    cert = unquote(cert).encode("utf8")
-    cert = x509.load_pem_x509_certificate(cert)
-    ca_cert = None
-    with open(os.path.join(app.config.get("OTS_CA_FOLDER"), "ca.pem"), "rb") as f:
-        ca_cert = x509.load_pem_x509_certificate(f.read())
+    if not _proxy_token_ok():
+        return None
 
     try:
-        ca_cert.public_key().verify(
-            signature=cert.signature,
-            data=cert.tbs_certificate_bytes,
-            algorithm=hashes.SHA256(),
-            padding=padding.PKCS1v15(),
-        )
+        cert = x509.load_pem_x509_certificate(unquote(cert).encode("utf8"))
+        with open(os.path.join(app.config.get("OTS_CA_FOLDER"), "ca.pem"), "rb") as f:
+            ca_cert = x509.load_pem_x509_certificate(f.read())
+
+        # Checks the issuer name and the signature for any key type. The old code
+        # assumed RSA with SHA-256 and let InvalidSignature escape as a 500.
+        cert.verify_directly_issued_by(ca_cert)
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if not cert.not_valid_before_utc <= now <= cert.not_valid_after_utc:
+            logger.error(f"Certificate outside its validity period: {cert.subject.rfc4514_string()}")
+            return None
 
         """
             Note to future self, get the common name (which is the username) like this
@@ -54,7 +95,7 @@ def verify_client_cert() -> x509.Certificate | None:
         """
 
         return cert
-    except VerificationError | UnsupportedGeneralNameType as e:
+    except (ValueError, TypeError, InvalidSignature, UnsupportedGeneralNameType) as e:
         logger.error(f"Failed to verify certificate: {e}")
         return None
 

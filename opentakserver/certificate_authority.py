@@ -20,6 +20,19 @@ from opentakserver.config_helpers import not_before_argument
 from .ca_config import ca_config, server_config
 from .config_helpers import subject_alt_names
 
+# Taklab: the common name becomes a directory under certs/ that issue_certificate
+# first removes with rmtree. "..", "." or a name with a separator pointed it at
+# the CA folder itself (PATCH /api/federation/certificate took it from the body).
+_SAFE_COMMON_NAME = re.compile(r"^[\w.\-]{1,255}$")
+
+
+def is_safe_common_name(common_name) -> bool:
+    return (
+        isinstance(common_name, str)
+        and bool(_SAFE_COMMON_NAME.match(common_name))
+        and common_name.strip(".") != ""
+    )
+
 
 class CertificateAuthority:
 
@@ -129,6 +142,8 @@ class CertificateAuthority:
             self.logger.debug("CA already exists")
 
     def issue_certificate(self, common_name, server=False):
+        if not is_safe_common_name(common_name):
+            raise ValueError(f"Unsafe certificate common name: {common_name!r}")
         if not os.path.exists(os.path.join(self.app.config.get("OTS_CA_FOLDER"), "ca.pem")):
             raise FileNotFoundError("ca.pem not found")
 
