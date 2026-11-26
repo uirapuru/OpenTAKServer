@@ -153,6 +153,10 @@ def test_start_recording_analysis_sends_signed_url_and_creator(app, client, visi
     res = client.post("/api/taklab/vision/analyses", json={"source": "recording", "recording_id": rec_id})
     assert res.status_code == 201 and res.json["id"] == 7
     method, url, body = fake.calls[-1]
+    # Keys read by the service start route (taklab vision server.py start_analysis).
+    assert set(body) == {"source", "recording_id", "label", "account", "started_at", "duration_s", "url",
+                         "created_by"}
+    assert body["source"] == "recording" and body["recording_id"] == rec_id
     assert body["created_by"] == "admin" and body["label"] == "Nagranie A"
     assert body["account"] == "alice" and body["duration_s"] == 90.0
     assert body["url"].startswith(f"https://{HOST}/api/taklab/vision/recordings/")

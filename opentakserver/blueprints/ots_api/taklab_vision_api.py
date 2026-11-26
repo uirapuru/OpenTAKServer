@@ -184,6 +184,7 @@ def start_analysis():
         config = rec_core.settings()
         payload = {
             "source": "recording",
+            "recording_id": rec.id,
             "label": rec.name or rec_core.default_name(rec, config),
             "account": rec.account,
             "started_at": rec.started_at.replace(tzinfo=timezone.utc).timestamp(),
