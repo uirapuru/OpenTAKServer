@@ -244,12 +244,13 @@ def test_file_route_rejects_bad_signatures(app, client, vision_env):
     other = add_recording(app, root)
     good = signed_path(rec_id)
     assert client.get(signed_path(other).replace(other, rec_id)).status_code == 403
-    assert client.get(good[:-1] + ("0" if good[-1] != "0" else "1")).status_code == 403
+    tampered = good[:-1] + ("0" if good[-1] != "0" else "1")
+    assert client.get(tampered).status_code == 403
     assert client.get(signed_path(rec_id, now=time.time() - tv.FILE_URL_TTL_S - 100)).status_code == 403
     assert client.get(signed_path(rec_id, now=time.time() + 2 * tv.FILE_URL_TTL_S)).status_code == 403
     assert client.get(signed_path(rec_id, token="inny")).status_code == 403
     assert client.get(f"/api/taklab/vision/recordings/{rec_id}/file").status_code == 403
-    res = client.get(good[:-1] + "0")
+    res = client.get(tampered)
     assert res.json["error"] == "Podpis adresu jest nieprawidłowy albo wygasł."
 
 
