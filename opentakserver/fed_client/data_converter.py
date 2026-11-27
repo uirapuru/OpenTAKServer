@@ -13,6 +13,7 @@ from opentakserver.functions import (
     datetime_from_iso8601_string,
     unix_timestamp_from_iso8601_string,
 )
+from opentakserver.eud_handler.sender_stamp import stamp_sender, strip_sender_elements
 from opentakserver.proto import fig_pb2
 from opentakserver.proto.fig_pb2 import FederatedEvent
 
@@ -49,11 +50,21 @@ def federated_event2cot(federated_event) -> str | None:
 
     # <detail> tag
     event.append(ElementTree.fromstring(federated_event.event.other))
+    # Taklab: podpis nadawcy od partnera federacji nie jest wiarygodny
+    strip_sender_elements(event)
     return ElementTree.tostring(event).decode("utf-8")
 
 
 def cot2federated_event(cot: str, node_id: str):
     federated_event = FederatedEvent()
+
+    # Taklab: partner nie dostaje nazw lokalnych kont z podpisu nadawcy. Parser
+    # "lxml" niżej traktuje znaczniki z podkreślnikiem jak tekst, więc podpis
+    # znika wcześniej, w drzewie XML.
+    xml_event = BeautifulSoup(cot, "xml").find("event")
+    if xml_event:
+        stamp_sender(xml_event, None)
+        cot = str(xml_event)
 
     soup = BeautifulSoup(cot, "lxml")
     event = soup.find("event")

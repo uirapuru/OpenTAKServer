@@ -78,6 +78,7 @@ from opentakserver.models.FederateToken import FederateToken
 from opentakserver.models.FederateGroups import FederateGroups
 from opentakserver.models.FederationGroups import FederationGroups
 from opentakserver.proto import atak_pb2
+from opentakserver.eud_handler.sender_stamp import CHAT_TYPE, stamp_sender
 
 # Stamp with the sender's account name, added to every direct message.
 # Clients cannot forge it because every copy they send is removed first.
@@ -1353,12 +1354,21 @@ class CoTController:
         origin["user"] = self.get_username(user_id)
         detail.append(origin)
 
+        # Taklab: czat bezpośredni dostaje też podpis nadawcy, który czyta
+        # stacja leśna wtyczki TakLab; każda droga do cot_parser przechodzi tędy
+        if event.attrs.get("type") == CHAT_TYPE:
+            stamp_sender(event, origin["user"])
+
     def route_cot(self, event, uid: str, user_id: int):
         if not uid or uid == self.context.app.config.get("OTS_NODE_ID"):
             # This is a server generated CoT (i.e. ADS-B scheduled job) which was already properly routed
             return
 
         self.strip_origin(event)
+
+        # Taklab: podpis nadawcy czatu od klienta znika; serwerowy dopisuje
+        # stamp_origin przy wiadomości bezpośredniej (sender_stamp.py)
+        stamp_sender(event, None)
 
         destinations = event.find_all("dest")
         if destinations:
@@ -1474,6 +1484,8 @@ class CoTController:
             if event:
                 # Before storing the CoT or passing it to Data Sync missions
                 self.strip_origin(event)
+                # Zapisane i odtwarzane z misji zdarzenia nie niosą podpisu nadawcy
+                stamp_sender(event, None)
 
                 if event.attrs.get("type") == MAP_SNAPSHOT_TYPE:
                     # A map snapshot shows what the user has on screen, route it but store nothing

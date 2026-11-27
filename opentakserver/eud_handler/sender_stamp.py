@@ -7,6 +7,8 @@ rozpoznał przy połączeniu. Odbiorca, np. stacja leśna wtyczki TakLab, wierzy
 tylko temu elementowi.
 """
 
+from xml.etree.ElementTree import Element
+
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
@@ -27,3 +29,11 @@ def stamp_sender(event: Tag, username: str | None) -> None:
         detail = factory.new_tag("detail")
         event.append(detail)
     detail.append(factory.new_tag(SENDER_TAG, attrs={"username": username}))
+
+
+def strip_sender_elements(root: Element) -> None:
+    """To samo usuwanie dla drzewa ElementTree (konwerter federacji)."""
+    for parent in list(root.iter()):
+        for child in list(parent):
+            if child.tag == SENDER_TAG:
+                parent.remove(child)
