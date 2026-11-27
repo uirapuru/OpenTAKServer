@@ -36,6 +36,7 @@ from opentakserver.EmailValidator import EmailValidator
 from opentakserver.PasswordValidator import PasswordValidator
 from opentakserver.cot_parser.shared_mission import FEDERATION_USERNAME_PREFIX
 from opentakserver.defaultconfig import DefaultConfig
+from opentakserver.eud_handler.sender_stamp import stamp_sender
 from opentakserver.extensions import logger as ots_logger, db, ldap_manager
 from opentakserver.functions import iso8601_string_from_datetime, datetime_from_iso8601_string
 
@@ -502,6 +503,11 @@ class EudHandler(socketserver.BaseRequestHandler):
             # GET /Marti/api/missions/invitations?clientUid=
             self.shared_invite_checked = True
             self.maybe_invite_shared_mission()
+
+        # Taklab: nadawcę czatu podpisuje serwer, nie klient (sender_stamp.py)
+        if event:
+            user = getattr(self, "user", None)
+            stamp_sender(event, user.username if user else None)
 
         self.publish_cot(event)
 
