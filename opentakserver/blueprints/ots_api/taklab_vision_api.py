@@ -41,6 +41,7 @@ MSG_NO_HOST = "Serwer nie ma publicznego adresu, więc nagrań nie da się anali
 MSG_BAD_BODY = "Wybierz transmisję albo nagranie."
 MSG_SIGNATURE = "Podpis adresu jest nieprawidłowy albo wygasł."
 MAX_SOURCES = 100
+MAX_OVERLAY_DELAY_S = 10.0
 SERVICE_PREFIX = "/v1/env/analyses/"
 OTS_PREFIX = "/api/taklab/vision/analyses/"
 
@@ -266,6 +267,42 @@ def person_thumb(analysis_id, person_id):
     result = Response(response.content, mimetype="image/jpeg")
     result.headers["Cache-Control"] = "private, no-store"
     return result
+
+
+def _jpeg_from(response):
+    if response.status_code != 200:
+        return _pass_json(response)
+    result = Response(response.content, mimetype="image/jpeg")
+    result.headers["Cache-Control"] = "private, no-store"
+    return result
+
+
+@taklab_vision_api.route("/api/taklab/vision/analyses/<int:analysis_id>/overlay", methods=["GET"])
+def analysis_overlay(analysis_id):
+    """Ramki osób w analizowanej transmisji i kto to jest (nakładka odtwarzacza)."""
+    cfg, viewer, refusal = _setup()
+    if refusal:
+        return refusal
+    try:
+        delay = float(request.args.get("delay", "0"))
+    except ValueError:
+        delay = 0.0
+    if not delay == delay or delay < 0 or delay > MAX_OVERLAY_DELAY_S:  # NaN albo poza zakresem
+        delay = 0.0
+    response, failure = _service(cfg, "GET", f"/v1/env/analyses/{analysis_id}/overlay?delay={delay:.2f}")
+    return failure or _pass_json(response)
+
+
+@taklab_vision_api.route(
+    "/api/taklab/vision/sightings/<int:sighting_id>/<any(face, frame):image>.jpg", methods=["GET"]
+)
+def sighting_image(sighting_id, image):
+    """Wycinek twarzy albo cała klatka jednego widzenia (link do poprzedniego rozpoznania)."""
+    cfg, viewer, refusal = _setup()
+    if refusal:
+        return refusal
+    response, failure = _service(cfg, "GET", f"/v1/env/sightings/{sighting_id}/{image}.jpg")
+    return failure or _jpeg_from(response)
 
 
 @taklab_vision_api.route("/api/taklab/vision/recordings/<rec_id>/file", methods=["GET"])

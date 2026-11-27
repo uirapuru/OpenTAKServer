@@ -271,3 +271,33 @@ def test_file_route_404_when_analysis_disabled(app, client, vision_env, monkeypa
     path = signed_path(rec_id)
     monkeypatch.setenv("OTS_TAKLAB_VISION_TOKEN", "")
     assert client.get(path).status_code == 404
+
+
+def test_overlay_passes_delay_and_needs_admin(client, vision_env, as_viewer):
+    fake, _ = vision_env
+    as_viewer["name"] = "alice"
+    assert client.get("/api/taklab/vision/analyses/5/overlay").status_code == 403
+    as_viewer["name"] = "admin"
+    body = {"running": True, "state": "running", "at": 1.0, "faces": [{"box": [0.1, 0.1, 0.2, 0.2],
+                                                                        "state": "new"}]}
+    fake.routes[("GET", "/v1/env/analyses/5/overlay")] = FakeResponse(200, body)
+    res = client.get("/api/taklab/vision/analyses/5/overlay?delay=2.5")
+    assert res.status_code == 200 and res.json == body
+    assert fake.calls[-1][1].endswith("/v1/env/analyses/5/overlay?delay=2.50")
+    for bad in ("x", "nan", "-1", "99"):
+        client.get(f"/api/taklab/vision/analyses/5/overlay?delay={bad}")
+        assert fake.calls[-1][1].endswith("?delay=0.00"), bad
+
+
+def test_sighting_images_proxied_for_admin_only(client, vision_env, as_viewer):
+    fake, _ = vision_env
+    as_viewer["name"] = "alice"
+    assert client.get("/api/taklab/vision/sightings/7/frame.jpg").status_code == 403
+    as_viewer["name"] = "admin"
+    fake.routes[("GET", "/v1/env/sightings/7/frame.jpg")] = FakeResponse(200, content=b"\xff\xd8frame")
+    fake.routes[("GET", "/v1/env/sightings/7/face.jpg")] = FakeResponse(200, content=b"\xff\xd8face")
+    res = client.get("/api/taklab/vision/sightings/7/frame.jpg")
+    assert res.data == b"\xff\xd8frame" and res.headers["Cache-Control"] == "private, no-store"
+    assert client.get("/api/taklab/vision/sightings/7/face.jpg").data == b"\xff\xd8face"
+    assert client.get("/api/taklab/vision/sightings/8/frame.jpg").status_code == 404
+    assert client.get("/api/taklab/vision/sightings/7/body.jpg").status_code == 404
